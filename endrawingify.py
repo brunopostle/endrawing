@@ -160,7 +160,7 @@ def create_epset_drawing(ifc_file, annotation):
     return pset
 
 
-def create_drawing_group(ifc_file, name):
+def create_drawing_group(ifc_file, annotation):
     group = run(
         "group.add_group",
         ifc_file,
@@ -170,22 +170,39 @@ def create_drawing_group(ifc_file, name):
         ifc_file,
         group=group,
         attributes={
-            "Name": name,
+            "Name": annotation.Name,
             "ObjectType": "DRAWING",
         },
     )
+    run("group.assign_group", ifc_file, group=group, products=[annotation])
     return group
 
 
-def create_drawing_info(ifc_file, building, name):
-    return ifc_file.createIfcDocumentInformation(
-        building.Name + "/" + name,
-        name,
+def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
+    info = ifc_file.createIfcDocumentInformation(
+        annotation.Name,
+        annotation.Name,
         None,
         None,
         None,
         None,
         "DRAWING",
+    )
+    rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+    rel.RelatedObjects = ifc_file.by_type("IfcProject")
+    rel.RelatingDocument = info
+    path_drawing = "drawings/" + annotation.Name + ".svg"
+    rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+    rel.RelatedObjects = [annotation]
+    rel.RelatingDocument = ifc_file.createIfcDocumentReference(
+        path_drawing, None, None, None, info
+    )
+    ifc_file.createIfcDocumentReference(
+        path_drawing,
+        str(drawing_id),
+        None,
+        "DRAWING",
+        sheet_info,
     )
 
 
@@ -267,30 +284,8 @@ def endrawingify(ifc_file):
                 },
             )
             drawing_id += 1
-
-            info = create_drawing_info(ifc_file, building, annotation.Name)
-            group = create_drawing_group(ifc_file, annotation.Name)
-            run("group.assign_group", ifc_file, group=group, products=[annotation])
-            rel = run(
-                "root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument"
-            )
-            rel.RelatedObjects = ifc_file.by_type("IfcProject")
-            rel.RelatingDocument = info
-            path_drawing = "drawings/" + annotation.Name + ".svg"
-            rel = run(
-                "root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument"
-            )
-            rel.RelatedObjects = [annotation]
-            rel.RelatingDocument = ifc_file.createIfcDocumentReference(
-                path_drawing, None, None, None, info
-            )
-            ifc_file.createIfcDocumentReference(
-                path_drawing,
-                str(drawing_id),
-                None,
-                "DRAWING",
-                sheet_info,
-            )
+            attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
+            group = create_drawing_group(ifc_file, annotation)
 
             for space in storey.IsDecomposedBy[0].RelatedObjects:
                 # label all the spaces in this storey
@@ -365,26 +360,8 @@ def endrawingify(ifc_file):
             },
         )
         drawing_id += 1
-
-        info = create_drawing_info(ifc_file, building, annotation.Name)
-        group = create_drawing_group(ifc_file, annotation.Name)
-        run("group.assign_group", ifc_file, group=group, products=[annotation])
-        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
-        rel.RelatedObjects = ifc_file.by_type("IfcProject")
-        rel.RelatingDocument = info
-        path_drawing = "drawings/" + annotation.Name + ".svg"
-        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
-        rel.RelatedObjects = [annotation]
-        rel.RelatingDocument = ifc_file.createIfcDocumentReference(
-            path_drawing, None, None, None, info
-        )
-        ifc_file.createIfcDocumentReference(
-            path_drawing,
-            str(drawing_id),
-            None,
-            "DRAWING",
-            sheet_info,
-        )
+        attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
+        group = create_drawing_group(ifc_file, annotation)
 
         # FIXME add storey SECTION_LEVEL lines
 
