@@ -160,6 +160,18 @@ def create_epset_drawing(ifc_file, annotation):
     return pset
 
 
+def edit_pset_elevation(ifc_file, pset, building):
+    run(
+        "pset.edit_pset",
+        ifc_file,
+        pset=pset,
+        properties={
+            "TargetView": "ELEVATION_VIEW",
+            "Include": 'IfcTypeProduct, IfcProduct, location="' + building.Name + '"',
+        },
+    )
+
+
 def create_drawing_group(ifc_file, annotation):
     group = run(
         "group.add_group",
@@ -188,15 +200,19 @@ def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
         None,
         "DRAWING",
     )
+    # associate this drawing-annotation with the Project
     rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
     rel.RelatedObjects = ifc_file.by_type("IfcProject")
     rel.RelatingDocument = info
+
     path_drawing = "drawings/" + annotation.Name + ".svg"
+    # associate SVG with this drawing-annotation
     rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
     rel.RelatedObjects = [annotation]
     rel.RelatingDocument = ifc_file.createIfcDocumentReference(
         path_drawing, None, None, None, info
     )
+    # place SVG in sheet
     ifc_file.createIfcDocumentReference(
         path_drawing,
         str(drawing_id),
@@ -330,7 +346,7 @@ def endrawingify(ifc_file):
                     properties={"Classes": "header"},
                 )
 
-        # north, south, east and west elevations
+        # north elevation
         point = ifc_file.createIfcCartesianPoint(
             [float(bbox_mid[0]), float(bbox_max[1]) + 1.0, float(bbox_mid[2])]
         )
@@ -348,17 +364,76 @@ def endrawingify(ifc_file):
         annotation.ObjectPlacement = local_placement
         annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
         pset = create_epset_drawing(ifc_file, annotation)
-        run(
-            "pset.edit_pset",
-            ifc_file,
-            pset=pset,
-            properties={
-                "TargetView": "ELEVATION_VIEW",
-                "Include": 'IfcTypeProduct, IfcProduct, location="'
-                + building.Name
-                + '"',
-            },
+        edit_pset_elevation(ifc_file, pset, building)
+        drawing_id += 1
+        attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
+        group = create_drawing_group(ifc_file, annotation)
+
+        # south elevation
+        point = ifc_file.createIfcCartesianPoint(
+            [float(bbox_mid[0]), float(bbox_min[1]) - 1.0, float(bbox_mid[2])]
         )
+        local_placement = ifc_file.createIfcLocalPlacement(
+            None,
+            ifc_file.createIfcAxis2Placement3D(
+                point,
+                ifc_file.createIfcDirection([0.0, -1.0, 0.0]),
+                ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
+            ),
+        )
+        annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = building.Name + " SOUTH"
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
+        pset = create_epset_drawing(ifc_file, annotation)
+        edit_pset_elevation(ifc_file, pset, building)
+        drawing_id += 1
+        attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
+        group = create_drawing_group(ifc_file, annotation)
+
+        # west elevation
+        point = ifc_file.createIfcCartesianPoint(
+            [float(bbox_min[0]) - 1.0, float(bbox_mid[1]), float(bbox_mid[2])]
+        )
+        local_placement = ifc_file.createIfcLocalPlacement(
+            None,
+            ifc_file.createIfcAxis2Placement3D(
+                point,
+                ifc_file.createIfcDirection([-1.0, 0.0, 0.0]),
+                ifc_file.createIfcDirection([0.0, -1.0, 0.0]),
+            ),
+        )
+        annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = building.Name + " WEST"
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = create_camera_shape(ifc_file, dim_y, dim_z, dim_x)
+        pset = create_epset_drawing(ifc_file, annotation)
+        edit_pset_elevation(ifc_file, pset, building)
+        drawing_id += 1
+        attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
+        group = create_drawing_group(ifc_file, annotation)
+
+        # east elevation
+        point = ifc_file.createIfcCartesianPoint(
+            [float(bbox_max[0]) + 1.0, float(bbox_mid[1]), float(bbox_mid[2])]
+        )
+        local_placement = ifc_file.createIfcLocalPlacement(
+            None,
+            ifc_file.createIfcAxis2Placement3D(
+                point,
+                ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
+                ifc_file.createIfcDirection([0.0, 1.0, 0.0]),
+            ),
+        )
+        annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = building.Name + " EAST"
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = create_camera_shape(ifc_file, dim_y, dim_z, dim_x)
+        pset = create_epset_drawing(ifc_file, annotation)
+        edit_pset_elevation(ifc_file, pset, building)
         drawing_id += 1
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
