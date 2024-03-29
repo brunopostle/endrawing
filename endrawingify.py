@@ -1,0 +1,398 @@
+#!/usr/bin/python3
+
+import sys
+import ifcopenshell
+from ifcopenshell.api import run
+import ifcopenshell.geom
+import ifcopenshell.util
+import ifcopenshell.util.selector
+import ifcopenshell.util.representation
+
+# 2024 Bruno Postle <bruno@postle.net>
+# License: SPDX:GPL-3.0-or-later
+
+
+def ensure_contexts(ifc_file):
+    """create Annotation Context if it doesn't already exist"""
+    model_context = ifcopenshell.util.representation.get_context(ifc_file, "Model")
+    plan_context = ifcopenshell.util.representation.get_context(ifc_file, "Plan")
+    if not plan_context:
+        plan_context = ifc_file.createIfcGeometricRepresentationContext(
+            None, "Plan", 2, None, model_context.WorldCoordinateSystem, None
+        )
+    annotation_context = ifcopenshell.util.representation.get_context(
+        ifc_file, "Plan", subcontext="Annotation"
+    )
+    if not annotation_context:
+        annotation_context = run(
+            "context.add_context",
+            ifc_file,
+            context_identifier="Annotation",
+            context_type=plan_context.ContextType,
+            parent=plan_context,
+            target_view="PLAN_VIEW",
+        )
+
+
+def get_bbox(spatial_element):
+    """fast but probably not the best way of doing this"""
+    bbox_min = []
+    bbox_max = []
+
+    items = ifcopenshell.util.selector.filter_elements(
+        ifc_file, 'IfcElement, location="' + spatial_element.Name + '"'
+    )
+    for item in items:
+        local_placement = ifcopenshell.util.placement.get_local_placement(
+            item.ObjectPlacement
+        )
+        x = local_placement[0][3]
+        y = local_placement[1][3]
+        z = local_placement[2][3]
+        if x == 0.0 or y == 0.0:
+            continue
+        if not bbox_min:
+            bbox_min = [x, y, z]
+            continue
+        if not bbox_max:
+            bbox_max = [x, y, z]
+            continue
+        if x < bbox_min[0]:
+            bbox_min[0] = x
+        if y < bbox_min[1]:
+            bbox_min[1] = y
+        if z < bbox_min[2]:
+            bbox_min[2] = z
+        if x > bbox_max[0]:
+            bbox_max[0] = x
+        if y > bbox_max[1]:
+            bbox_max[1] = y
+        if z > bbox_max[2]:
+            bbox_max[2] = z
+    bbox_mid = [
+        (bbox_min[0] + bbox_max[0]) / 2,
+        (bbox_min[1] + bbox_max[1]) / 2,
+        (bbox_min[2] + bbox_max[2]) / 2,
+    ]
+    return (bbox_min, bbox_mid, bbox_max)
+
+
+def get_centroid(element):
+    """again, probably not the best way to do this"""
+    settings = ifcopenshell.geom.settings()
+    element_shape = ifcopenshell.geom.create_shape(settings, element)
+    verts = element_shape.geometry.verts
+    no_verts = int(len(verts) / 3)
+    x = 0.0
+    y = 0.0
+    z = 0.0
+    for i in range(no_verts):
+        x += verts[(i * 3)]
+        y += verts[(i * 3) + 1]
+        z += verts[(i * 3) + 2]
+    x /= no_verts
+    y /= no_verts
+    z /= no_verts
+    return [x, y, z]
+
+
+def create_camera_shape(ifc_file, x, y, z):
+    body_context = ifcopenshell.util.representation.get_context(
+        ifc_file, "Model", subcontext="Body"
+    )
+    placement = ifc_file.createIfcAxis2Placement3D(
+        ifc_file.createIfcCartesianPoint([x / -2, y / -2, float(-z)]),
+        None,
+        None,
+    )
+    solid = ifc_file.createIfcCSGSolid(ifc_file.createIfcBlock(placement, x, y, z))
+    return ifc_file.createIfcProductDefinitionShape(
+        None,
+        None,
+        [ifc_file.createIfcShapeRepresentation(body_context, "Body", "CSG", [solid])],
+    )
+
+
+def create_label_shape(ifc_file):
+    annotation_context = ifcopenshell.util.representation.get_context(
+        ifc_file, "Plan", subcontext="Annotation"
+    )
+    placement = ifc_file.createIfcAxis2Placement3D(
+        ifc_file.createIfcCartesianPoint([0.0, 0.0, 0.0]),
+        ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
+        ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
+    )
+    literal = ifc_file.createIfcTextLiteralWithExtent(
+        "{{Name}}",
+        placement,
+        "RIGHT",
+        ifc_file.createIfcPlanarExtent(1000.0, 1000.0),
+        "center",
+    )
+    representation = ifc_file.createIfcShapeRepresentation(
+        annotation_context, "Annotation", "Annotation2D", [literal]
+    )
+    return ifc_file.createIfcProductDefinitionShape(None, None, [representation])
+
+
+def create_epset_drawing(ifc_file, annotation):
+    pset = run("pset.add_pset", ifc_file, product=annotation, name="EPset_Drawing")
+    run(
+        "pset.edit_pset",
+        ifc_file,
+        pset=pset,
+        properties={
+            "TargetView": "PLAN_VIEW",
+            "Scale": "1/50",
+            "HumanScale": "1:50",
+            "HasUnderlay": False,
+            "HasLinework": True,
+            "HasAnnotation": True,
+            "GlobalReferencing": True,
+            "Stylesheet": "drawings/assets/default.css",
+            "Markers": "drawings/assets/markers.svg",
+            "Symbols": "drawings/assets/symbols.svg",
+            "Patterns": "drawings/assets/patterns.svg",
+            "ShadingStyles": "drawings/assets/shading_styles.json",
+            "CurrentShadingStyle": "Blender Default",
+        },
+    )
+    return pset
+
+
+def create_drawing_group(ifc_file, name):
+    group = run(
+        "group.add_group",
+        ifc_file,
+    )
+    run(
+        "group.edit_group",
+        ifc_file,
+        group=group,
+        attributes={
+            "Name": name,
+            "ObjectType": "DRAWING",
+        },
+    )
+    return group
+
+
+def create_drawing_info(ifc_file, building, name):
+    return ifc_file.createIfcDocumentInformation(
+        building.Name + "/" + name,
+        name,
+        None,
+        None,
+        None,
+        None,
+        "DRAWING",
+    )
+
+
+def endrawingify(ifc_file):
+    """Assemble drawings for storeys and sheets for buildings"""
+    ensure_contexts(ifc_file)
+
+    sheet_id = 0
+    for building in ifc_file.by_type("IfcBuilding"):
+
+        # drawing sheet
+        sheet_id += 1
+        identification = "A" + str(sheet_id).zfill(4)
+
+        sheet_info = ifc_file.createIfcDocumentInformation(
+            identification,
+            building.Name,
+            "General Arrangement",
+            None,
+            None,
+            None,
+            "SHEET",
+        )
+
+        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+        rel.RelatedObjects = ifc_file.by_type("IfcProject")
+        rel.RelatingDocument = sheet_info
+
+        ifc_file.createIfcDocumentReference(
+            "layouts/" + identification + " - " + building.Name + ".svg",
+            None,
+            None,
+            "LAYOUT",
+            sheet_info,
+        )
+        ifc_file.createIfcDocumentReference(
+            "layouts/titleblocks/A1.svg", None, None, "TITLEBLOCK", sheet_info
+        )
+
+        # size of building
+        bbox_min, bbox_mid, bbox_max = get_bbox(building)
+        dim_x = int(bbox_max[0] - bbox_min[0]) + 2
+        dim_y = int(bbox_max[1] - bbox_min[1]) + 2
+        dim_z = int(bbox_max[2] - bbox_min[2]) + 2
+
+        storeys = {}
+        for ifc_storey in ifcopenshell.util.selector.filter_elements(
+            ifc_file, 'IfcBuildingStorey, location="' + building.Name + '"'
+        ):
+            local_placement = ifcopenshell.util.placement.get_local_placement(
+                ifc_storey.ObjectPlacement
+            )
+            storeys[local_placement[2][3]] = ifc_storey
+
+        drawing_id = 0
+        for elevation in sorted(list(storeys.keys())):
+            storey = storeys[elevation]
+
+            point = ifc_file.createIfcCartesianPoint(
+                [float(bbox_mid[0]), float(bbox_mid[1]), float(elevation + 1.8)]
+            )
+            local_placement = ifc_file.createIfcLocalPlacement(
+                None, ifc_file.createIfcAxis2Placement3D(point, None, None)
+            )
+            annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+            annotation.Name = building.Name + " " + storey.Name
+            annotation.ObjectType = "DRAWING"
+            annotation.ObjectPlacement = local_placement
+            annotation.Representation = create_camera_shape(
+                ifc_file, dim_x, dim_y, 10.0
+            )
+            pset = create_epset_drawing(ifc_file, annotation)
+            run(
+                "pset.edit_pset",
+                ifc_file,
+                pset=pset,
+                properties={
+                    "TargetView": "PLAN_VIEW",
+                },
+            )
+            drawing_id += 1
+
+            info = create_drawing_info(ifc_file, building, annotation.Name)
+            group = create_drawing_group(ifc_file, annotation.Name)
+            run("group.assign_group", ifc_file, group=group, products=[annotation])
+            rel = run(
+                "root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument"
+            )
+            rel.RelatedObjects = ifc_file.by_type("IfcProject")
+            rel.RelatingDocument = info
+            path_drawing = "drawings/" + annotation.Name + ".svg"
+            rel = run(
+                "root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument"
+            )
+            rel.RelatedObjects = [annotation]
+            rel.RelatingDocument = ifc_file.createIfcDocumentReference(
+                path_drawing, None, None, None, info
+            )
+            ifc_file.createIfcDocumentReference(
+                path_drawing,
+                str(drawing_id),
+                None,
+                "DRAWING",
+                sheet_info,
+            )
+
+            for space in storey.IsDecomposedBy[0].RelatedObjects:
+                # label all the spaces in this storey
+                centroid = get_centroid(space)
+                placement = ifc_file.createIfcLocalPlacement(
+                    None,
+                    ifc_file.createIfcAxis2Placement3D(
+                        ifc_file.createIfcCartesianPoint(
+                            [centroid[0], centroid[1], float(elevation) + 0.1]
+                        ),
+                        ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
+                        ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
+                    ),
+                )
+
+                # room label
+                annotation = run(
+                    "root.create_entity", ifc_file, ifc_class="IfcAnnotation"
+                )
+                annotation.Name = "TEXT"
+                annotation.ObjectType = "TEXT"
+                annotation.ObjectPlacement = placement
+                annotation.Representation = create_label_shape(ifc_file)
+
+                run("group.assign_group", ifc_file, group=group, products=[annotation])
+                run(
+                    "drawing.assign_product",
+                    ifc_file,
+                    relating_product=space,
+                    related_object=annotation,
+                )
+                pset = run(
+                    "pset.add_pset",
+                    ifc_file,
+                    product=annotation,
+                    name="EPset_Annotation",
+                )
+                run(
+                    "pset.edit_pset",
+                    ifc_file,
+                    pset=pset,
+                    properties={"Classes": "header"},
+                )
+
+        # north, south, east and west elevations
+        point = ifc_file.createIfcCartesianPoint(
+            [float(bbox_mid[0]), float(bbox_max[1]) + 1.0, float(bbox_mid[2])]
+        )
+        local_placement = ifc_file.createIfcLocalPlacement(
+            None,
+            ifc_file.createIfcAxis2Placement3D(
+                point,
+                ifc_file.createIfcDirection([0.0, 1.0, 0.0]),
+                ifc_file.createIfcDirection([-1.0, 0.0, 0.0]),
+            ),
+        )
+        annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = building.Name + " NORTH"
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
+        pset = create_epset_drawing(ifc_file, annotation)
+        run(
+            "pset.edit_pset",
+            ifc_file,
+            pset=pset,
+            properties={
+                "TargetView": "ELEVATION_VIEW",
+                "Include": 'IfcTypeProduct, IfcProduct, location="'
+                + building.Name
+                + '"',
+            },
+        )
+        drawing_id += 1
+
+        info = create_drawing_info(ifc_file, building, annotation.Name)
+        group = create_drawing_group(ifc_file, annotation.Name)
+        run("group.assign_group", ifc_file, group=group, products=[annotation])
+        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+        rel.RelatedObjects = ifc_file.by_type("IfcProject")
+        rel.RelatingDocument = info
+        path_drawing = "drawings/" + annotation.Name + ".svg"
+        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+        rel.RelatedObjects = [annotation]
+        rel.RelatingDocument = ifc_file.createIfcDocumentReference(
+            path_drawing, None, None, None, info
+        )
+        ifc_file.createIfcDocumentReference(
+            path_drawing,
+            str(drawing_id),
+            None,
+            "DRAWING",
+            sheet_info,
+        )
+
+        # FIXME add storey SECTION_LEVEL lines
+
+
+if __name__ == "__main__":
+    if not len(sys.argv) == 3:
+        print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
+    else:
+        ifc_file = ifcopenshell.open(sys.argv[1])
+        endrawingify(ifc_file)
+        ifc_file.write(sys.argv[2])
