@@ -205,6 +205,7 @@ def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
     rel.RelatedObjects = ifc_file.by_type("IfcProject")
     rel.RelatingDocument = info
 
+    # FIXME don't use unsanitised IFC data for filenames
     path_drawing = "drawings/" + annotation.Name + ".svg"
     # associate SVG with this drawing-annotation
     rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
@@ -247,6 +248,7 @@ def endrawingify(ifc_file):
         rel.RelatedObjects = ifc_file.by_type("IfcProject")
         rel.RelatingDocument = sheet_info
 
+        # FIXME don't use unsanitised IFC data for filenames
         ifc_file.createIfcDocumentReference(
             "layouts/" + identification + " - " + building.Name + ".svg",
             None,
