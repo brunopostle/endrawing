@@ -93,7 +93,14 @@ def get_centroid(element):
     x /= no_verts
     y /= no_verts
     z /= no_verts
-    return [x, y, z]
+    local_placement = ifcopenshell.util.placement.get_local_placement(
+        element.ObjectPlacement
+    )
+    return [
+        x + float(local_placement[0][3]),
+        y + float(local_placement[1][3]),
+        z + float(local_placement[2][3]),
+    ]
 
 
 def create_camera_shape(ifc_file, x, y, z):
