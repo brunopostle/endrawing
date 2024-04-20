@@ -179,6 +179,18 @@ def edit_pset_elevation(ifc_file, pset, building):
     )
 
 
+def edit_pset_location(ifc_file, pset, x, y):
+    run(
+        "pset.edit_pset",
+        ifc_file,
+        pset=pset,
+        properties={
+            "PositionX": float(x),
+            "PositionY": float(y),
+        },
+    )
+
+
 def create_drawing_group(ifc_file, annotation):
     group = run(
         "group.add_group",
@@ -282,7 +294,11 @@ def endrawingify(ifc_file):
             )
             storeys[local_placement[2][3]] = ifc_storey
 
+        # TODO create a location plan from all bounding boxes, label just this building
+
         drawing_id = 0
+        location_x = 30.0
+        location_y = 30.0
         for elevation in sorted(list(storeys.keys())):
             storey = storeys[elevation]
 
@@ -308,7 +324,10 @@ def endrawingify(ifc_file):
                     "TargetView": "PLAN_VIEW",
                 },
             )
+            edit_pset_location(ifc_file, pset, location_x, location_y)
             drawing_id += 1
+            # FIXME 20.0 assumes metres and 1:50
+            location_x += 10.0 + (dim_x * 20.0)
             attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
             group = create_drawing_group(ifc_file, annotation)
 
@@ -355,6 +374,9 @@ def endrawingify(ifc_file):
                     properties={"Classes": "header"},
                 )
 
+        location_x = 30.0
+        location_y = 30.0 + 20.0 + (dim_y * 20.0)
+
         # north elevation
         point = ifc_file.createIfcCartesianPoint(
             [float(bbox_mid[0]), float(bbox_max[1]) + 1.0, float(bbox_mid[2])]
@@ -374,7 +396,9 @@ def endrawingify(ifc_file):
         annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
         pset = create_epset_drawing(ifc_file, annotation)
         edit_pset_elevation(ifc_file, pset, building)
+        edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
+        location_x += 10.0 + (dim_x * 20.0)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -397,7 +421,9 @@ def endrawingify(ifc_file):
         annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
         pset = create_epset_drawing(ifc_file, annotation)
         edit_pset_elevation(ifc_file, pset, building)
+        edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
+        location_x += 10.0 + (dim_x * 20.0)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -420,7 +446,9 @@ def endrawingify(ifc_file):
         annotation.Representation = create_camera_shape(ifc_file, dim_y, dim_z, dim_x)
         pset = create_epset_drawing(ifc_file, annotation)
         edit_pset_elevation(ifc_file, pset, building)
+        edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
+        location_x += 10.0 + (dim_y * 20.0)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -443,7 +471,9 @@ def endrawingify(ifc_file):
         annotation.Representation = create_camera_shape(ifc_file, dim_y, dim_z, dim_x)
         pset = create_epset_drawing(ifc_file, annotation)
         edit_pset_elevation(ifc_file, pset, building)
+        edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
+        location_x += 10.0 + (dim_y * 20.0)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
