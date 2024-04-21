@@ -142,7 +142,8 @@ def create_label_shape(ifc_file):
     return ifc_file.createIfcProductDefinitionShape(None, None, [representation])
 
 
-def create_epset_drawing(ifc_file, annotation):
+def create_epset_drawing(ifc_file, annotation, scale=50):
+    scale = str(int(scale))
     pset = run("pset.add_pset", ifc_file, product=annotation, name="EPset_Drawing")
     run(
         "pset.edit_pset",
@@ -150,8 +151,8 @@ def create_epset_drawing(ifc_file, annotation):
         pset=pset,
         properties={
             "TargetView": "PLAN_VIEW",
-            "Scale": "1/50",
-            "HumanScale": "1:50",
+            "Scale": "1/" + scale,
+            "HumanScale": "1:" + scale,
             "HasUnderlay": False,
             "HasLinework": True,
             "HasAnnotation": True,
@@ -233,6 +234,7 @@ def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
         path_drawing, None, None, None, info
     )
     # place SVG in sheet
+    # FIXME drawing_id not used?
     ifc_file.createIfcDocumentReference(
         path_drawing,
         str(drawing_id),
@@ -242,9 +244,10 @@ def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
     )
 
 
-def endrawingify(ifc_file):
+def execute(ifc_file, scale=50, titleblock="A1"):
     """Assemble drawings for storeys and sheets for buildings"""
     ensure_contexts(ifc_file)
+    unit_scale_mm = ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
 
     sheet_id = 0
     for building in ifc_file.by_type("IfcBuilding"):
@@ -276,7 +279,7 @@ def endrawingify(ifc_file):
             sheet_info,
         )
         ifc_file.createIfcDocumentReference(
-            "layouts/titleblocks/A1.svg", None, None, "TITLEBLOCK", sheet_info
+            "layouts/titleblocks/" + titleblock + ".svg", None, None, "TITLEBLOCK", sheet_info
         )
 
         # size of building
@@ -315,7 +318,7 @@ def endrawingify(ifc_file):
             annotation.Representation = create_camera_shape(
                 ifc_file, dim_x, dim_y, 10.0
             )
-            pset = create_epset_drawing(ifc_file, annotation)
+            pset = create_epset_drawing(ifc_file, annotation, scale)
             run(
                 "pset.edit_pset",
                 ifc_file,
@@ -326,8 +329,7 @@ def endrawingify(ifc_file):
             )
             edit_pset_location(ifc_file, pset, location_x, location_y)
             drawing_id += 1
-            # FIXME 20.0 assumes metres and 1:50
-            location_x += 10.0 + (dim_x * 20.0)
+            location_x += 10.0 + (dim_x * unit_scale_mm / scale)
             attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
             group = create_drawing_group(ifc_file, annotation)
 
@@ -375,7 +377,7 @@ def endrawingify(ifc_file):
                 )
 
         location_x = 30.0
-        location_y = 30.0 + 20.0 + (dim_y * 20.0)
+        location_y = 30.0 + 20.0 + (dim_y * unit_scale_mm / scale)
 
         # north elevation
         point = ifc_file.createIfcCartesianPoint(
@@ -394,11 +396,11 @@ def endrawingify(ifc_file):
         annotation.ObjectType = "DRAWING"
         annotation.ObjectPlacement = local_placement
         annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
-        pset = create_epset_drawing(ifc_file, annotation)
+        pset = create_epset_drawing(ifc_file, annotation, scale)
         edit_pset_elevation(ifc_file, pset, building)
         edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
-        location_x += 10.0 + (dim_x * 20.0)
+        location_x += 10.0 + (dim_x * unit_scale_mm / scale)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -419,11 +421,11 @@ def endrawingify(ifc_file):
         annotation.ObjectType = "DRAWING"
         annotation.ObjectPlacement = local_placement
         annotation.Representation = create_camera_shape(ifc_file, dim_x, dim_z, dim_y)
-        pset = create_epset_drawing(ifc_file, annotation)
+        pset = create_epset_drawing(ifc_file, annotation, scale)
         edit_pset_elevation(ifc_file, pset, building)
         edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
-        location_x += 10.0 + (dim_x * 20.0)
+        location_x += 10.0 + (dim_x * unit_scale_mm / scale)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -444,11 +446,11 @@ def endrawingify(ifc_file):
         annotation.ObjectType = "DRAWING"
         annotation.ObjectPlacement = local_placement
         annotation.Representation = create_camera_shape(ifc_file, dim_y, dim_z, dim_x)
-        pset = create_epset_drawing(ifc_file, annotation)
+        pset = create_epset_drawing(ifc_file, annotation, scale)
         edit_pset_elevation(ifc_file, pset, building)
         edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
-        location_x += 10.0 + (dim_y * 20.0)
+        location_x += 10.0 + (dim_y * unit_scale_mm / scale)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -469,11 +471,11 @@ def endrawingify(ifc_file):
         annotation.ObjectType = "DRAWING"
         annotation.ObjectPlacement = local_placement
         annotation.Representation = create_camera_shape(ifc_file, dim_y, dim_z, dim_x)
-        pset = create_epset_drawing(ifc_file, annotation)
+        pset = create_epset_drawing(ifc_file, annotation, scale)
         edit_pset_elevation(ifc_file, pset, building)
         edit_pset_location(ifc_file, pset, location_x, location_y)
         drawing_id += 1
-        location_x += 10.0 + (dim_y * 20.0)
+        location_x += 10.0 + (dim_y * unit_scale_mm / scale)
         attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
         group = create_drawing_group(ifc_file, annotation)
 
@@ -485,5 +487,5 @@ if __name__ == "__main__":
         print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
     else:
         ifc_file = ifcopenshell.open(sys.argv[1])
-        endrawingify(ifc_file)
+        execute(ifc_file)
         ifc_file.write(sys.argv[2])
