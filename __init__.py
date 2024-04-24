@@ -244,7 +244,7 @@ def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
     )
 
 
-def execute(ifc_file, scale=50, titleblock="A1"):
+def execute(ifc_file, scale=100, titleblock="A2"):
     """Assemble drawings for storeys and sheets for buildings"""
     ensure_contexts(ifc_file)
     unit_scale_mm = ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
