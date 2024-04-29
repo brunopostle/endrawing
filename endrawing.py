@@ -312,7 +312,7 @@ def execute(ifc_file, scale=100, titleblock="A2"):
                 None, ifc_file.createIfcAxis2Placement3D(point, None, None)
             )
             annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
-            annotation.Name = building.Name + " " + storey.Name
+            annotation.Name = storey.Name
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
             annotation.Representation = create_camera_shape(
