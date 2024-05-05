@@ -250,7 +250,7 @@ def execute(ifc_file, scale=100, titleblock="A2"):
     unit_scale_mm = ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
 
     sheet_id = 0
-    for building in ifc_file.by_type("IfcBuilding"):
+    for building in sorted(ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name):
 
         # drawing sheet
         sheet_id += 1
