@@ -503,7 +503,7 @@ class Endrawing:
 
 if __name__ == "__main__":
     try:
-        import blenderbim.bim.ifc
+        import blenderbim.tool
     except ImportError:
         if not len(sys.argv) == 3:
                 print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
@@ -513,4 +513,4 @@ if __name__ == "__main__":
             ifc_file.write(sys.argv[2])
     else:
         # running in BlenderBIM
-        Endrawing.execute(blenderbim.bim.ifc.IfcStore.file)
+        Endrawing.execute(blenderbim.tool.Ifc.get())
