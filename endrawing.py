@@ -360,7 +360,9 @@ class Endrawing:
                         annotation.Name = "TEXT"
                         annotation.ObjectType = "TEXT"
                         annotation.ObjectPlacement = placement
-                        annotation.Representation = Endrawing.create_label_shape(ifc_file)
+                        annotation.Representation = Endrawing.create_label_shape(
+                            ifc_file
+                        )
 
                         run(
                             "group.assign_group",
@@ -506,7 +508,7 @@ if __name__ == "__main__":
         import blenderbim.tool
     except ImportError:
         if not len(sys.argv) == 3:
-                print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
+            print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
         else:
             ifc_file = ifcopenshell.open(sys.argv[1])
             Endrawing.execute(ifc_file)
