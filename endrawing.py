@@ -2,7 +2,12 @@
 
 import sys
 import ifcopenshell
-from ifcopenshell.api import run
+import ifcopenshell.api as api
+import ifcopenshell.api.context
+import ifcopenshell.api.drawing
+import ifcopenshell.api.group
+import ifcopenshell.api.pset
+import ifcopenshell.api.root
 import ifcopenshell.geom
 import ifcopenshell.util
 import ifcopenshell.util.selector
@@ -25,8 +30,7 @@ class Endrawing:
             ifc_file, "Plan", subcontext="Annotation"
         )
         if not annotation_context:
-            annotation_context = run(
-                "context.add_context",
+            annotation_context = api.context.add_context(
                 ifc_file,
                 context_identifier="Annotation",
                 context_type=plan_context.ContextType,
@@ -144,9 +148,8 @@ class Endrawing:
 
     def create_epset_drawing(ifc_file, annotation, scale=50):
         scale = str(int(scale))
-        pset = run("pset.add_pset", ifc_file, product=annotation, name="EPset_Drawing")
-        run(
-            "pset.edit_pset",
+        pset = api.pset.add_pset(ifc_file, product=annotation, name="EPset_Drawing")
+        api.pset.edit_pset(
             ifc_file,
             pset=pset,
             properties={
@@ -168,8 +171,7 @@ class Endrawing:
         return pset
 
     def edit_pset_elevation(ifc_file, pset, building):
-        run(
-            "pset.edit_pset",
+        api.pset.edit_pset(
             ifc_file,
             pset=pset,
             properties={
@@ -181,8 +183,7 @@ class Endrawing:
         )
 
     def edit_pset_location(ifc_file, pset, x, y):
-        run(
-            "pset.edit_pset",
+        api.pset.edit_pset(
             ifc_file,
             pset=pset,
             properties={
@@ -192,12 +193,10 @@ class Endrawing:
         )
 
     def create_drawing_group(ifc_file, annotation):
-        group = run(
-            "group.add_group",
+        group = api.group.add_group(
             ifc_file,
         )
-        run(
-            "group.edit_group",
+        api.group.edit_group(
             ifc_file,
             group=group,
             attributes={
@@ -205,7 +204,7 @@ class Endrawing:
                 "ObjectType": "DRAWING",
             },
         )
-        run("group.assign_group", ifc_file, group=group, products=[annotation])
+        api.group.assign_group(ifc_file, group=group, products=[annotation])
         return group
 
     def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
@@ -219,14 +218,14 @@ class Endrawing:
             "DRAWING",
         )
         # associate this drawing-annotation with the Project
-        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+        rel = api.root.create_entity(ifc_file, ifc_class="IfcRelAssociatesDocument")
         rel.RelatedObjects = ifc_file.by_type("IfcProject")
         rel.RelatingDocument = info
 
         # FIXME don't use unsanitised IFC data for filenames
         path_drawing = "drawings/" + annotation.Name + ".svg"
         # associate SVG with this drawing-annotation
-        rel = run("root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument")
+        rel = api.root.create_entity(ifc_file, ifc_class="IfcRelAssociatesDocument")
         rel.RelatedObjects = [annotation]
         rel.RelatingDocument = ifc_file.createIfcDocumentReference(
             path_drawing, None, None, None, info
@@ -263,9 +262,7 @@ class Endrawing:
                 "SHEET",
             )
 
-            rel = run(
-                "root.create_entity", ifc_file, ifc_class="IfcRelAssociatesDocument"
-            )
+            rel = api.root.create_entity(ifc_file, ifc_class="IfcRelAssociatesDocument")
             rel.RelatedObjects = ifc_file.by_type("IfcProject")
             rel.RelatingDocument = sheet_info
 
@@ -314,9 +311,7 @@ class Endrawing:
                 local_placement = ifc_file.createIfcLocalPlacement(
                     None, ifc_file.createIfcAxis2Placement3D(point, None, None)
                 )
-                annotation = run(
-                    "root.create_entity", ifc_file, ifc_class="IfcAnnotation"
-                )
+                annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
                 annotation.Name = storey.Name
                 annotation.ObjectType = "DRAWING"
                 annotation.ObjectPlacement = local_placement
@@ -324,8 +319,7 @@ class Endrawing:
                     ifc_file, dim_x, dim_y, 10.0
                 )
                 pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
-                run(
-                    "pset.edit_pset",
+                api.pset.edit_pset(
                     ifc_file,
                     pset=pset,
                     properties={
@@ -354,8 +348,8 @@ class Endrawing:
                         )
 
                         # room label
-                        annotation = run(
-                            "root.create_entity", ifc_file, ifc_class="IfcAnnotation"
+                        annotation = api.root.create_entity(
+                            ifc_file, ifc_class="IfcAnnotation"
                         )
                         annotation.Name = "TEXT"
                         annotation.ObjectType = "TEXT"
@@ -364,26 +358,22 @@ class Endrawing:
                             ifc_file
                         )
 
-                        run(
-                            "group.assign_group",
+                        api.group.assign_group(
                             ifc_file,
                             group=group,
                             products=[annotation],
                         )
-                        run(
-                            "drawing.assign_product",
+                        api.drawing.assign_product(
                             ifc_file,
                             relating_product=space,
                             related_object=annotation,
                         )
-                        pset = run(
-                            "pset.add_pset",
+                        pset = api.pset.add_pset(
                             ifc_file,
                             product=annotation,
                             name="EPset_Annotation",
                         )
-                        run(
-                            "pset.edit_pset",
+                        api.pset.edit_pset(
                             ifc_file,
                             pset=pset,
                             properties={"Classes": "header"},
@@ -404,7 +394,7 @@ class Endrawing:
                     ifc_file.createIfcDirection([-1.0, 0.0, 0.0]),
                 ),
             )
-            annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
             annotation.Name = building.Name + " NORTH"
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
@@ -431,7 +421,7 @@ class Endrawing:
                     ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
                 ),
             )
-            annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
             annotation.Name = building.Name + " SOUTH"
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
@@ -458,7 +448,7 @@ class Endrawing:
                     ifc_file.createIfcDirection([0.0, -1.0, 0.0]),
                 ),
             )
-            annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
             annotation.Name = building.Name + " WEST"
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
@@ -485,7 +475,7 @@ class Endrawing:
                     ifc_file.createIfcDirection([0.0, 1.0, 0.0]),
                 ),
             )
-            annotation = run("root.create_entity", ifc_file, ifc_class="IfcAnnotation")
+            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
             annotation.Name = building.Name + " EAST"
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
