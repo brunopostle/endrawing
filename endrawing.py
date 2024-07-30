@@ -59,41 +59,42 @@ class Endrawing:
                 target_view="PLAN_VIEW",
             )
 
-    def get_bbox(ifc_file, spatial_element):
+    def get_bbox(ifc_file, spatial_elements):
         """fast but probably not the best way of doing this"""
         bbox_min = []
         bbox_max = []
 
-        items = ifcopenshell.util.selector.filter_elements(
-            ifc_file, 'IfcElement, location="' + spatial_element.Name + '"'
-        )
-        for item in items:
-            local_placement = ifcopenshell.util.placement.get_local_placement(
-                item.ObjectPlacement
+        for spatial_element in spatial_elements:
+            items = ifcopenshell.util.selector.filter_elements(
+                ifc_file, 'IfcElement, location="' + spatial_element.Name + '"'
             )
-            x = local_placement[0][3]
-            y = local_placement[1][3]
-            z = local_placement[2][3]
-            if x == 0.0 or y == 0.0:
-                continue
-            if not bbox_min:
-                bbox_min = [x, y, z]
-                continue
-            if not bbox_max:
-                bbox_max = [x, y, z]
-                continue
-            if x < bbox_min[0]:
-                bbox_min[0] = x
-            if y < bbox_min[1]:
-                bbox_min[1] = y
-            if z < bbox_min[2]:
-                bbox_min[2] = z
-            if x > bbox_max[0]:
-                bbox_max[0] = x
-            if y > bbox_max[1]:
-                bbox_max[1] = y
-            if z > bbox_max[2]:
-                bbox_max[2] = z
+            for item in items:
+                local_placement = ifcopenshell.util.placement.get_local_placement(
+                    item.ObjectPlacement
+                )
+                x = local_placement[0][3]
+                y = local_placement[1][3]
+                z = local_placement[2][3]
+                if x == 0.0 or y == 0.0:
+                    continue
+                if not bbox_min:
+                    bbox_min = [x, y, z]
+                    continue
+                if not bbox_max:
+                    bbox_max = [x, y, z]
+                    continue
+                if x < bbox_min[0]:
+                    bbox_min[0] = x
+                if y < bbox_min[1]:
+                    bbox_min[1] = y
+                if z < bbox_min[2]:
+                    bbox_min[2] = z
+                if x > bbox_max[0]:
+                    bbox_max[0] = x
+                if y > bbox_max[1]:
+                    bbox_max[1] = y
+                if z > bbox_max[2]:
+                    bbox_max[2] = z
         bbox_mid = [
             (bbox_min[0] + bbox_max[0]) / 2,
             (bbox_min[1] + bbox_max[1]) / 2,
@@ -266,6 +267,12 @@ class Endrawing:
         Endrawing.ensure_contexts(ifc_file)
         unit_scale_mm = ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
 
+        # size of all buildings
+        bbox_all_min, bbox_all_mid, bbox_all_max = Endrawing.get_bbox(ifc_file, ifc_file.by_type("IfcBuilding"))
+        dim_all_x = int(bbox_all_max[0] - bbox_all_min[0]) + 2
+        dim_all_y = int(bbox_all_max[1] - bbox_all_min[1]) + 2
+        dim_all_z = int(bbox_all_max[2] - bbox_all_min[2]) + 2
+
         sheet_id = 0
         for building in sorted(ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name):
 
@@ -304,7 +311,7 @@ class Endrawing:
             )
 
             # size of building
-            bbox_min, bbox_mid, bbox_max = Endrawing.get_bbox(ifc_file, building)
+            bbox_min, bbox_mid, bbox_max = Endrawing.get_bbox(ifc_file, [building])
             dim_x = int(bbox_max[0] - bbox_min[0]) + 2
             dim_y = int(bbox_max[1] - bbox_min[1]) + 2
             dim_z = int(bbox_max[2] - bbox_min[2]) + 2
@@ -317,8 +324,6 @@ class Endrawing:
                     ifc_storey.ObjectPlacement
                 )
                 storeys[local_placement[2][3]] = ifc_storey
-
-            # TODO create a location plan from all bounding boxes, label just this building
 
             drawing_id = 0
             location_x = 30.0
@@ -508,6 +513,38 @@ class Endrawing:
             Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
             drawing_id += 1
             location_x += 10.0 + (dim_y * unit_scale_mm / scale)
+            Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
+            group = Endrawing.create_drawing_group(ifc_file, annotation)
+
+            # location plan
+            # FIXME only draw if more than one building
+            point = ifc_file.createIfcCartesianPoint(
+                [float(bbox_all_mid[0]), float(bbox_all_mid[1]), float(bbox_all_max[2] + 1.0)]
+            )
+            local_placement = ifc_file.createIfcLocalPlacement(
+                None, ifc_file.createIfcAxis2Placement3D(point, None, None)
+            )
+            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
+            annotation.Name = building.Name + " LOCATION"
+            annotation.ObjectType = "DRAWING"
+            annotation.ObjectPlacement = local_placement
+            annotation.Representation = Endrawing.create_camera_shape(
+                ifc_file, dim_all_x, dim_all_y, dim_all_z
+            )
+            pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale * 10.0)
+            api.pset.edit_pset(
+                ifc_file,
+                pset=pset,
+                properties={
+                    "TargetView": "PLAN_VIEW",
+                    "Include": 'IfcSite + IfcRoof, IfcWall, IfcSlab, location="'
+                    + building.Name
+                    + '"',
+                },
+            )
+            Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
+            drawing_id += 1
+            location_x += 10.0 + (dim_all_x * unit_scale_mm / (scale * 10.0))
             Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
             group = Endrawing.create_drawing_group(ifc_file, annotation)
 
