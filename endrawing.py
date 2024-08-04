@@ -410,7 +410,7 @@ class Endrawing:
 
             # north elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_max[1]) + 1.0, float(bbox_mid[2])]
+                [float(bbox_mid[0]), float(bbox_max[1]), float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -437,7 +437,7 @@ class Endrawing:
 
             # south elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_min[1]) - 1.0, float(bbox_mid[2])]
+                [float(bbox_mid[0]), float(bbox_min[1]), float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -464,7 +464,7 @@ class Endrawing:
 
             # west elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_min[0]) - 1.0, float(bbox_mid[1]), float(bbox_mid[2])]
+                [float(bbox_min[0]), float(bbox_mid[1]), float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -491,7 +491,7 @@ class Endrawing:
 
             # east elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_max[0]) + 1.0, float(bbox_mid[1]), float(bbox_mid[2])]
+                [float(bbox_max[0]), float(bbox_mid[1]), float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
