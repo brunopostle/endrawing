@@ -25,15 +25,15 @@ Either run on the command-line:
 
     endrawing.py infile.ifc outfile.ifc
 
-..or within BlenderBIM: Load the script in the Blender Text Editor and 'run'
+..or within Bonsai BIM: Load the script in the Blender Text Editor and 'run'
 (only once!).
 
-Then in BlenderBIM generate all the drawings before generating the sheets.
+Then in Bonsai BIM generate all the drawings before generating the sheets.
 
 Drawbacks:
 
 - A2 and 1:100 scale are currently hard-coded
-- BlenderBIM currently doesn't recognise drawing positions, so you still have to arrange in Inkscape
+- Bonsai BIM currently doesn't recognise drawing positions, so you still have to arrange in Inkscape
 
 """
 
@@ -553,7 +553,7 @@ class Endrawing:
 
 if __name__ == "__main__":
     try:
-        import blenderbim.tool
+        import bonsai.tool
     except ImportError:
         if not len(sys.argv) == 3:
             print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
@@ -562,5 +562,5 @@ if __name__ == "__main__":
             Endrawing.execute(ifc_file)
             ifc_file.write(sys.argv[2])
     else:
-        # running in BlenderBIM
-        Endrawing.execute(blenderbim.tool.Ifc.get())
+        # running in Bonsai BIM
+        Endrawing.execute(bonsai.tool.Ifc.get())
