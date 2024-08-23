@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import sys
+from natsort import natsorted
 import ifcopenshell
 import ifcopenshell.api as api
 import ifcopenshell.api.context
@@ -132,7 +133,7 @@ class Endrawing:
             ifc_file, "Model", subcontext="Body"
         )
         placement = ifc_file.createIfcAxis2Placement3D(
-            ifc_file.createIfcCartesianPoint([x / -2, y / -2, float(-z)]),
+            ifc_file.createIfcCartesianPoint([float(x / -2), float(y / -2), float(-z)]),
             None,
             None,
         )
@@ -269,16 +270,16 @@ class Endrawing:
 
         # size of all buildings
         bbox_all_min, bbox_all_mid, bbox_all_max = Endrawing.get_bbox(ifc_file, ifc_file.by_type("IfcBuilding"))
-        dim_all_x = int(bbox_all_max[0] - bbox_all_min[0]) + 2
-        dim_all_y = int(bbox_all_max[1] - bbox_all_min[1]) + 2
-        dim_all_z = int(bbox_all_max[2] - bbox_all_min[2]) + 2
+        dim_all_x = bbox_all_max[0] - bbox_all_min[0] + 2
+        dim_all_y = bbox_all_max[1] - bbox_all_min[1] + 2
+        dim_all_z = bbox_all_max[2] - bbox_all_min[2] + 2
 
         sheet_id = 0
-        for building in sorted(ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name):
+        for building in natsorted(ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name):
 
             # drawing sheet
             sheet_id += 1
-            identification = "A" + str(sheet_id).zfill(4)
+            identification = "A" + str(sheet_id).zfill(3)
 
             sheet_info = ifc_file.createIfcDocumentInformation(
                 identification,
@@ -312,9 +313,9 @@ class Endrawing:
 
             # size of building
             bbox_min, bbox_mid, bbox_max = Endrawing.get_bbox(ifc_file, [building])
-            dim_x = int(bbox_max[0] - bbox_min[0]) + 2
-            dim_y = int(bbox_max[1] - bbox_min[1]) + 2
-            dim_z = int(bbox_max[2] - bbox_min[2]) + 2
+            dim_x = bbox_max[0] - bbox_min[0] + 2
+            dim_y = bbox_max[1] - bbox_min[1] + 2
+            dim_z = bbox_max[2] - bbox_min[2] + 2
 
             storeys = {}
             for ifc_storey in ifcopenshell.util.selector.filter_elements(
@@ -410,7 +411,7 @@ class Endrawing:
 
             # north elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_max[1]) + 1.0, float(bbox_mid[2])]
+                [float(bbox_mid[0]), float(bbox_max[1]) + 0.5, float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -425,7 +426,7 @@ class Endrawing:
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
             annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_x, dim_z, dim_y
+                ifc_file, dim_x, dim_z, dim_y - 1.0
             )
             pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
             Endrawing.edit_pset_elevation(ifc_file, pset, building)
@@ -437,7 +438,7 @@ class Endrawing:
 
             # south elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_min[1]) - 1.0, float(bbox_mid[2])]
+                [float(bbox_mid[0]), float(bbox_min[1]) - 0.5, float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -452,7 +453,7 @@ class Endrawing:
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
             annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_x, dim_z, dim_y
+                ifc_file, dim_x, dim_z, dim_y - 1.0
             )
             pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
             Endrawing.edit_pset_elevation(ifc_file, pset, building)
@@ -464,7 +465,7 @@ class Endrawing:
 
             # west elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_min[0]) - 1.0, float(bbox_mid[1]), float(bbox_mid[2])]
+                [float(bbox_min[0]) - 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -479,7 +480,7 @@ class Endrawing:
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
             annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_y, dim_z, dim_x
+                ifc_file, dim_y, dim_z, dim_x - 1.0
             )
             pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
             Endrawing.edit_pset_elevation(ifc_file, pset, building)
@@ -491,7 +492,7 @@ class Endrawing:
 
             # east elevation
             point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_max[0]) + 1.0, float(bbox_mid[1]), float(bbox_mid[2])]
+                [float(bbox_max[0]) + 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
             )
             local_placement = ifc_file.createIfcLocalPlacement(
                 None,
@@ -506,7 +507,7 @@ class Endrawing:
             annotation.ObjectType = "DRAWING"
             annotation.ObjectPlacement = local_placement
             annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_y, dim_z, dim_x
+                ifc_file, dim_y, dim_z, dim_x - 1.0
             )
             pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
             Endrawing.edit_pset_elevation(ifc_file, pset, building)
