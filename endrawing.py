@@ -767,6 +767,7 @@ class DrawingGenerator:
             identification = f"A{str(sheet_id).zfill(3)}"
             sheet_info = self.create_sheet_info(identification, building.Name)
 
+            # FIXME should use local building orientation for bbox and cameras
             # Calculate building bounding box and dimensions
             building_bbox = GeometryUtils.get_bbox(self.ifc_file, [building])
             bbox_min, bbox_mid, bbox_max = building_bbox
