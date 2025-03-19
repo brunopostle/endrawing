@@ -13,12 +13,13 @@ import ifcopenshell.geom
 import ifcopenshell.util
 import ifcopenshell.util.selector
 import ifcopenshell.util.representation
+import ifcopenshell.util.placement
+import ifcopenshell.util.unit
 
 # 2024 Bruno Postle <bruno@postle.net>
 # License: SPDX:GPL-3.0-or-later
 
 """
-
 Generate General Arrangement drawings for IFC buildings. Each building gets a
 sheet with plans and north, south, east and west elevations.
 
@@ -30,27 +31,34 @@ Either run on the command-line:
 (only once!).
 
 Then in Bonsai BIM generate all the drawings before generating the sheets.
-
-Drawbacks:
-
-- A2 and 1:100 scale are currently hard-coded
-- Bonsai BIM currently doesn't recognise drawing positions, so you still have to arrange in Inkscape
-
 """
 
 
-class Endrawing:
+class ContextManager:
+    """Manages IFC context creation and retrieval"""
+
+    @staticmethod
     def ensure_contexts(ifc_file):
-        """create Annotation Context if it doesn't already exist"""
+        """Create Annotation Context if it doesn't already exist
+
+        Args:
+            ifc_file: The IFC file
+
+        Returns:
+            Dictionary of contexts
+        """
         model_context = ifcopenshell.util.representation.get_context(ifc_file, "Model")
         plan_context = ifcopenshell.util.representation.get_context(ifc_file, "Plan")
+
         if not plan_context:
             plan_context = ifc_file.createIfcGeometricRepresentationContext(
                 None, "Plan", 2, None, model_context.WorldCoordinateSystem, None
             )
+
         annotation_context = ifcopenshell.util.representation.get_context(
             ifc_file, "Plan", subcontext="Annotation"
         )
+
         if not annotation_context:
             annotation_context = api.context.add_context(
                 ifc_file,
@@ -60,84 +68,135 @@ class Endrawing:
                 target_view="PLAN_VIEW",
             )
 
+        return {
+            "model": model_context,
+            "plan": plan_context,
+            "annotation": annotation_context,
+        }
+
+
+class GeometryUtils:
+    """Utility functions for geometry operations"""
+
+    @staticmethod
     def get_bbox(ifc_file, spatial_elements):
-        """fast but probably not the best way of doing this"""
+        """Calculate bounding box for spatial elements
+
+        Args:
+            ifc_file: The IFC file
+            spatial_elements: List of spatial elements
+
+        Returns:
+            Tuple of (min_point, mid_point, max_point)
+        """
         bbox_min = []
         bbox_max = []
 
         for spatial_element in spatial_elements:
             items = ifcopenshell.util.selector.filter_elements(
-                ifc_file, 'IfcElement, location="' + spatial_element.Name + '"'
+                ifc_file, f'IfcElement, location="{spatial_element.Name}"'
             )
+
             for item in items:
                 local_placement = ifcopenshell.util.placement.get_local_placement(
                     item.ObjectPlacement
                 )
-                x = local_placement[0][3]
-                y = local_placement[1][3]
-                z = local_placement[2][3]
+                x, y, z = (
+                    local_placement[0][3],
+                    local_placement[1][3],
+                    local_placement[2][3],
+                )
+
                 if x == 0.0 or y == 0.0:
                     continue
+
                 if not bbox_min:
                     bbox_min = [x, y, z]
                     continue
+
                 if not bbox_max:
                     bbox_max = [x, y, z]
                     continue
-                if x < bbox_min[0]:
-                    bbox_min[0] = x
-                if y < bbox_min[1]:
-                    bbox_min[1] = y
-                if z < bbox_min[2]:
-                    bbox_min[2] = z
-                if x > bbox_max[0]:
-                    bbox_max[0] = x
-                if y > bbox_max[1]:
-                    bbox_max[1] = y
-                if z > bbox_max[2]:
-                    bbox_max[2] = z
+
+                bbox_min[0] = min(bbox_min[0], x)
+                bbox_min[1] = min(bbox_min[1], y)
+                bbox_min[2] = min(bbox_min[2], z)
+
+                bbox_max[0] = max(bbox_max[0], x)
+                bbox_max[1] = max(bbox_max[1], y)
+                bbox_max[2] = max(bbox_max[2], z)
+
+        # Calculate midpoint
         bbox_mid = [
             (bbox_min[0] + bbox_max[0]) / 2,
             (bbox_min[1] + bbox_max[1]) / 2,
             (bbox_min[2] + bbox_max[2]) / 2,
         ]
+
         return (bbox_min, bbox_mid, bbox_max)
 
+    @staticmethod
     def get_centroid(element):
-        """again, probably not the best way to do this"""
+        """Calculate centroid of an element
+
+        Args:
+            element: The IFC element
+
+        Returns:
+            List [x, y, z] of centroid coordinates
+        """
         settings = ifcopenshell.geom.settings()
         element_shape = ifcopenshell.geom.create_shape(settings, element)
         verts = element_shape.geometry.verts
         no_verts = int(len(verts) / 3)
-        x = 0.0
-        y = 0.0
-        z = 0.0
+
+        x, y, z = 0.0, 0.0, 0.0
         for i in range(no_verts):
             x += verts[(i * 3)]
             y += verts[(i * 3) + 1]
             z += verts[(i * 3) + 2]
+
         x /= no_verts
         y /= no_verts
         z /= no_verts
+
         local_placement = ifcopenshell.util.placement.get_local_placement(
             element.ObjectPlacement
         )
+
         return [
             x + float(local_placement[0][3]),
             y + float(local_placement[1][3]),
             z + float(local_placement[2][3]),
         ]
 
+
+class ShapeCreator:
+    """Creates IFC shape representations"""
+
+    @staticmethod
     def create_camera_shape(ifc_file, x, y, z):
+        """Create a camera shape representation
+
+        Args:
+            ifc_file: The IFC file
+            x, y, z: Dimensions
+
+        Returns:
+            IfcProductDefinitionShape
+        """
         body_context = ifcopenshell.util.representation.get_context(
             ifc_file, "Model", subcontext="Body"
         )
+
         placement = ifc_file.createIfcAxis2Placement3D(
             ifc_file.createIfcCartesianPoint([float(x / -2), float(y / -2), float(-z)]),
             None,
             None,
         )
+
         solid = ifc_file.createIfcCSGSolid(ifc_file.createIfcBlock(placement, x, y, z))
+
         return ifc_file.createIfcProductDefinitionShape(
             None,
             None,
@@ -148,15 +207,26 @@ class Endrawing:
             ],
         )
 
+    @staticmethod
     def create_label_shape(ifc_file):
+        """Create a text label shape representation
+
+        Args:
+            ifc_file: The IFC file
+
+        Returns:
+            IfcProductDefinitionShape
+        """
         annotation_context = ifcopenshell.util.representation.get_context(
             ifc_file, "Plan", subcontext="Annotation"
         )
+
         placement = ifc_file.createIfcAxis2Placement3D(
             ifc_file.createIfcCartesianPoint([0.0, 0.0, 0.0]),
             ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
             ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
         )
+
         literal = ifc_file.createIfcTextLiteralWithExtent(
             "{{Name}}",
             placement,
@@ -164,21 +234,67 @@ class Endrawing:
             ifc_file.createIfcPlanarExtent(1000.0, 1000.0),
             "center",
         )
+
         representation = ifc_file.createIfcShapeRepresentation(
             annotation_context, "Annotation", "Annotation2D", [literal]
         )
+
         return ifc_file.createIfcProductDefinitionShape(None, None, [representation])
 
-    def create_epset_drawing(ifc_file, annotation, scale=50):
-        scale = str(int(scale))
-        pset = api.pset.add_pset(ifc_file, product=annotation, name="EPset_Drawing")
+
+class DrawingGenerator:
+    """Main drawing generation class"""
+
+    def __init__(self, ifc_file, scale=100, titleblock="A2"):
+        """Initialize the drawing generator
+
+        Args:
+            ifc_file: The IFC file
+            scale: Drawing scale denominator (default 100)
+            titleblock: Titleblock size (default "A2")
+        """
+        self.ifc_file = ifc_file
+        self.scale = scale
+        self.titleblock = titleblock
+        self.contexts = ContextManager.ensure_contexts(ifc_file)
+        self.unit_scale_mm = (
+            ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
+        )
+
+        # Calculate overall bounding box for site plan
+        self.buildings = natsorted(
+            ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name
+        )
+        self.bbox_all = GeometryUtils.get_bbox(ifc_file, self.buildings)
+        self.bbox_all_min, self.bbox_all_mid, self.bbox_all_max = self.bbox_all
+
+        # Calculate dimensions
+        self.dim_all_x = self.bbox_all_max[0] - self.bbox_all_min[0] + 2
+        self.dim_all_y = self.bbox_all_max[1] - self.bbox_all_min[1] + 2
+        self.dim_all_z = self.bbox_all_max[2] - self.bbox_all_min[2] + 2
+
+    def create_drawing_pset(self, annotation, scale=50):
+        """Create EPset_Drawing property set
+
+        Args:
+            annotation: The annotation element
+            scale: Drawing scale denominator
+
+        Returns:
+            The created property set
+        """
+        scale_str = str(int(scale))
+        pset = api.pset.add_pset(
+            self.ifc_file, product=annotation, name="EPset_Drawing"
+        )
+
         api.pset.edit_pset(
-            ifc_file,
+            self.ifc_file,
             pset=pset,
             properties={
                 "TargetView": "PLAN_VIEW",
-                "Scale": "1/" + scale,
-                "HumanScale": "1:" + scale,
+                "Scale": f"1/{scale_str}",
+                "HumanScale": f"1:{scale_str}",
                 "HasUnderlay": False,
                 "HasLinework": True,
                 "HasAnnotation": True,
@@ -191,23 +307,38 @@ class Endrawing:
                 "CurrentShadingStyle": "Blender Default",
             },
         )
+
         return pset
 
-    def edit_pset_elevation(ifc_file, pset, building):
+    def set_elevation_properties(self, pset, building):
+        """Set elevation view properties
+
+        Args:
+            pset: The property set
+            building: The building element
+        """
         api.pset.edit_pset(
-            ifc_file,
+            self.ifc_file,
             pset=pset,
             properties={
                 "TargetView": "ELEVATION_VIEW",
-                "Include": 'IfcTypeProduct, IfcProduct, location="'
-                + building.Name
-                + '"',
+                "Include": f'IfcTypeProduct, IfcProduct, location="{building.Name}"',
             },
         )
 
-    def edit_pset_location(ifc_file, pset, x, y):
+    def set_location_properties(self, pset, x, y):
+        """Set position properties
+
+        Args:
+            pset: The property set
+            x, y: Position coordinates
+
+        FIXME This is the location of the drawing on the sheet, but note that a
+        drawing could appear on multiple sheets so attaching this to the drawing
+        is wrong.
+        """
         api.pset.edit_pset(
-            ifc_file,
+            self.ifc_file,
             pset=pset,
             properties={
                 "PositionX": float(x),
@@ -215,23 +346,39 @@ class Endrawing:
             },
         )
 
-    def create_drawing_group(ifc_file, annotation):
-        group = api.group.add_group(
-            ifc_file,
-        )
+    def create_drawing_group(self, annotation):
+        """Create a drawing group
+
+        Args:
+            annotation: The annotation element
+
+        Returns:
+            The created group
+        """
+        group = api.group.add_group(self.ifc_file)
+
         api.group.edit_group(
-            ifc_file,
+            self.ifc_file,
             group=group,
             attributes={
                 "Name": annotation.Name,
                 "ObjectType": "DRAWING",
             },
         )
-        api.group.assign_group(ifc_file, group=group, products=[annotation])
+
+        api.group.assign_group(self.ifc_file, group=group, products=[annotation])
+
         return group
 
-    def attach_sheet(ifc_file, annotation, sheet_info, drawing_id):
-        info = ifc_file.createIfcDocumentInformation(
+    def attach_sheet(self, annotation, sheet_info, drawing_id):
+        """Attach a drawing to a sheet
+
+        Args:
+            annotation: The annotation element
+            sheet_info: Sheet document information
+            drawing_id: Drawing ID
+        """
+        info = self.ifc_file.createIfcDocumentInformation(
             annotation.Name,
             annotation.Name,
             None,
@@ -240,22 +387,28 @@ class Endrawing:
             None,
             "DRAWING",
         )
-        # associate this drawing-annotation with the Project
-        rel = api.root.create_entity(ifc_file, ifc_class="IfcRelAssociatesDocument")
-        rel.RelatedObjects = ifc_file.by_type("IfcProject")
+
+        # Associate this drawing-annotation with the Project
+        rel = api.root.create_entity(
+            self.ifc_file, ifc_class="IfcRelAssociatesDocument"
+        )
+        rel.RelatedObjects = self.ifc_file.by_type("IfcProject")
         rel.RelatingDocument = info
 
-        # FIXME don't use unsanitised IFC data for filenames
-        path_drawing = "drawings/" + annotation.Name + ".svg"
-        # associate SVG with this drawing-annotation
-        rel = api.root.create_entity(ifc_file, ifc_class="IfcRelAssociatesDocument")
+        # Generate path for drawing SVG
+        path_drawing = f"drawings/{annotation.Name}.svg"
+
+        # Associate SVG with this drawing-annotation
+        rel = api.root.create_entity(
+            self.ifc_file, ifc_class="IfcRelAssociatesDocument"
+        )
         rel.RelatedObjects = [annotation]
-        rel.RelatingDocument = ifc_file.createIfcDocumentReference(
+        rel.RelatingDocument = self.ifc_file.createIfcDocumentReference(
             path_drawing, None, None, None, info
         )
-        # place SVG in sheet
-        # FIXME drawing_id not used?
-        ifc_file.createIfcDocumentReference(
+
+        # Place SVG in sheet
+        self.ifc_file.createIfcDocumentReference(
             path_drawing,
             str(drawing_id),
             None,
@@ -263,305 +416,437 @@ class Endrawing:
             sheet_info,
         )
 
-    def execute(ifc_file, scale=100, titleblock="A2"):
-        """Assemble drawings for storeys and sheets for buildings"""
-        Endrawing.ensure_contexts(ifc_file)
-        unit_scale_mm = ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
+    def create_sheet_info(self, identification, building_name):
+        """Create sheet document information
 
-        # size of all buildings
-        bbox_all_min, bbox_all_mid, bbox_all_max = Endrawing.get_bbox(ifc_file, ifc_file.by_type("IfcBuilding"))
-        dim_all_x = bbox_all_max[0] - bbox_all_min[0] + 2
-        dim_all_y = bbox_all_max[1] - bbox_all_min[1] + 2
-        dim_all_z = bbox_all_max[2] - bbox_all_min[2] + 2
+        Args:
+            identification: Sheet identifier
+            building_name: Building name
 
+        Returns:
+            IfcDocumentInformation
+        """
+        sheet_info = self.ifc_file.createIfcDocumentInformation(
+            identification,
+            building_name,
+            "General Arrangement",
+            None,
+            None,
+            None,
+            "SHEET",
+        )
+
+        rel = api.root.create_entity(
+            self.ifc_file, ifc_class="IfcRelAssociatesDocument"
+        )
+        rel.RelatedObjects = self.ifc_file.by_type("IfcProject")
+        rel.RelatingDocument = sheet_info
+
+        # Create document references
+        self.ifc_file.createIfcDocumentReference(
+            f"layouts/{identification} - {building_name}.svg",
+            None,
+            None,
+            "LAYOUT",
+            sheet_info,
+        )
+
+        self.ifc_file.createIfcDocumentReference(
+            f"layouts/titleblocks/{self.titleblock}.svg",
+            None,
+            None,
+            "TITLEBLOCK",
+            sheet_info,
+        )
+
+        return sheet_info
+
+    def create_plan_drawing(
+        self,
+        storey,
+        building_bbox,
+        scale,
+        location_x,
+        location_y,
+        sheet_info,
+        drawing_id,
+    ):
+        """Create a plan drawing for a storey
+
+        Args:
+            storey: The building storey
+            building_bbox: Building bounding box tuple
+            scale: Drawing scale
+            location_x, location_y: Drawing position
+            sheet_info: Sheet document information
+            drawing_id: Drawing ID
+
+        Returns:
+            Tuple of (new_drawing_id, new_location_x, annotation, group)
+        """
+        bbox_min, bbox_mid, bbox_max = building_bbox
+        dim_x = bbox_max[0] - bbox_min[0] + 2
+        dim_y = bbox_max[1] - bbox_min[1] + 2
+
+        # Get elevation from storey placement
+        local_placement = ifcopenshell.util.placement.get_local_placement(
+            storey.ObjectPlacement
+        )
+        elevation = local_placement[2][3]
+
+        # Create camera position
+        point = self.ifc_file.createIfcCartesianPoint(
+            [float(bbox_mid[0]), float(bbox_mid[1]), float(elevation + 1.8)]
+        )
+
+        local_placement = self.ifc_file.createIfcLocalPlacement(
+            None, self.ifc_file.createIfcAxis2Placement3D(point, None, None)
+        )
+
+        # Create annotation
+        annotation = api.root.create_entity(self.ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = storey.Name
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = ShapeCreator.create_camera_shape(
+            self.ifc_file, dim_x, dim_y, 10.0
+        )
+
+        # Create property set
+        pset = self.create_drawing_pset(annotation, scale)
+        api.pset.edit_pset(
+            self.ifc_file,
+            pset=pset,
+            properties={
+                "TargetView": "PLAN_VIEW",
+            },
+        )
+
+        # Set position
+        self.set_location_properties(pset, location_x, location_y)
+
+        # Attach to sheet
+        self.attach_sheet(annotation, sheet_info, drawing_id)
+
+        # Create group
+        group = self.create_drawing_group(annotation)
+
+        # Update drawing ID and position for next drawing
+        drawing_id += 1
+        location_x += 10.0 + (dim_x * self.unit_scale_mm / scale)
+
+        return drawing_id, location_x, annotation, group
+
+    def create_space_labels(self, storey, elevation, group):
+        """Create labels for spaces in a storey
+
+        Args:
+            storey: The building storey
+            elevation: Elevation value
+            group: Drawing group
+        """
+        if not storey.IsDecomposedBy:
+            return
+
+        for space in storey.IsDecomposedBy[0].RelatedObjects:
+            # Get space centroid
+            centroid = GeometryUtils.get_centroid(space)
+
+            # Create placement
+            placement = self.ifc_file.createIfcLocalPlacement(
+                None,
+                self.ifc_file.createIfcAxis2Placement3D(
+                    self.ifc_file.createIfcCartesianPoint(
+                        [centroid[0], centroid[1], float(elevation) + 0.1]
+                    ),
+                    self.ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
+                    self.ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
+                ),
+            )
+
+            # Create room label annotation
+            annotation = api.root.create_entity(
+                self.ifc_file, ifc_class="IfcAnnotation"
+            )
+            annotation.Name = "TEXT"
+            annotation.ObjectType = "TEXT"
+            annotation.ObjectPlacement = placement
+            annotation.Representation = ShapeCreator.create_label_shape(self.ifc_file)
+
+            # Add to group and assign to space
+            api.group.assign_group(
+                self.ifc_file,
+                group=group,
+                products=[annotation],
+            )
+
+            api.drawing.assign_product(
+                self.ifc_file,
+                relating_product=space,
+                related_object=annotation,
+            )
+
+            # Add properties
+            pset = api.pset.add_pset(
+                self.ifc_file,
+                product=annotation,
+                name="EPset_Annotation",
+            )
+
+            api.pset.edit_pset(
+                self.ifc_file,
+                pset=pset,
+                properties={"Classes": "header"},
+            )
+
+    def create_elevation_drawing(
+        self,
+        building,
+        building_bbox,
+        direction,
+        location_x,
+        location_y,
+        sheet_info,
+        drawing_id,
+    ):
+        """Create an elevation drawing
+
+        Args:
+            building: The building element
+            building_bbox: Building bounding box tuple
+            direction: Elevation direction ("NORTH", "SOUTH", "EAST", "WEST")
+            location_x, location_y: Drawing position
+            sheet_info: Sheet document information
+            drawing_id: Drawing ID
+
+        Returns:
+            Tuple of (new_drawing_id, new_location_x)
+        """
+        bbox_min, bbox_mid, bbox_max = building_bbox
+        dim_x = bbox_max[0] - bbox_min[0] + 2
+        dim_y = bbox_max[1] - bbox_min[1] + 2
+        dim_z = bbox_max[2] - bbox_min[2] + 2
+
+        # Set up direction-specific parameters
+        if direction == "NORTH":
+            point = self.ifc_file.createIfcCartesianPoint(
+                [float(bbox_mid[0]), float(bbox_max[1]) + 0.5, float(bbox_mid[2])]
+            )
+            axis_dir = self.ifc_file.createIfcDirection([0.0, 1.0, 0.0])
+            ref_dir = self.ifc_file.createIfcDirection([-1.0, 0.0, 0.0])
+            camera_dims = (dim_x, dim_z, dim_y - 1.0)
+
+        elif direction == "SOUTH":
+            point = self.ifc_file.createIfcCartesianPoint(
+                [float(bbox_mid[0]), float(bbox_min[1]) - 0.5, float(bbox_mid[2])]
+            )
+            axis_dir = self.ifc_file.createIfcDirection([0.0, -1.0, 0.0])
+            ref_dir = self.ifc_file.createIfcDirection([1.0, 0.0, 0.0])
+            camera_dims = (dim_x, dim_z, dim_y - 1.0)
+
+        elif direction == "WEST":
+            point = self.ifc_file.createIfcCartesianPoint(
+                [float(bbox_min[0]) - 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
+            )
+            axis_dir = self.ifc_file.createIfcDirection([-1.0, 0.0, 0.0])
+            ref_dir = self.ifc_file.createIfcDirection([0.0, -1.0, 0.0])
+            camera_dims = (dim_y, dim_z, dim_x - 1.0)
+
+        elif direction == "EAST":
+            point = self.ifc_file.createIfcCartesianPoint(
+                [float(bbox_max[0]) + 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
+            )
+            axis_dir = self.ifc_file.createIfcDirection([1.0, 0.0, 0.0])
+            ref_dir = self.ifc_file.createIfcDirection([0.0, 1.0, 0.0])
+            camera_dims = (dim_y, dim_z, dim_x - 1.0)
+
+        # Create placement
+        local_placement = self.ifc_file.createIfcLocalPlacement(
+            None,
+            self.ifc_file.createIfcAxis2Placement3D(point, axis_dir, ref_dir),
+        )
+
+        # Create annotation
+        annotation = api.root.create_entity(self.ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = f"{building.Name} {direction}"
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = ShapeCreator.create_camera_shape(
+            self.ifc_file, camera_dims[0], camera_dims[1], camera_dims[2]
+        )
+
+        # Create property set
+        pset = self.create_drawing_pset(annotation, self.scale)
+        self.set_elevation_properties(pset, building)
+        self.set_location_properties(pset, location_x, location_y)
+
+        # Attach to sheet
+        self.attach_sheet(annotation, sheet_info, drawing_id)
+
+        # Create group
+        self.create_drawing_group(annotation)
+
+        # Update drawing ID and position for next drawing
+        drawing_id += 1
+        location_x += 10.0 + (camera_dims[0] * self.unit_scale_mm / self.scale)
+
+        return drawing_id, location_x
+
+    def create_location_plan(
+        self, building, location_x, location_y, sheet_info, drawing_id
+    ):
+        """Create a location plan drawing
+
+        Args:
+            building: The building element
+            location_x, location_y: Drawing position
+            sheet_info: Sheet document information
+            drawing_id: Drawing ID
+
+        Returns:
+            Tuple of (new_drawing_id, new_location_x)
+        """
+        # Create point at center of all buildings, above max height
+        point = self.ifc_file.createIfcCartesianPoint(
+            [
+                float(self.bbox_all_mid[0]),
+                float(self.bbox_all_mid[1]),
+                float(self.bbox_all_max[2] + 1.0),
+            ]
+        )
+
+        # Create placement
+        local_placement = self.ifc_file.createIfcLocalPlacement(
+            None, self.ifc_file.createIfcAxis2Placement3D(point, None, None)
+        )
+
+        # Create annotation
+        annotation = api.root.create_entity(self.ifc_file, ifc_class="IfcAnnotation")
+        annotation.Name = f"{building.Name} LOCATION"
+        annotation.ObjectType = "DRAWING"
+        annotation.ObjectPlacement = local_placement
+        annotation.Representation = ShapeCreator.create_camera_shape(
+            self.ifc_file, self.dim_all_x, self.dim_all_y, self.dim_all_z
+        )
+
+        # Use larger scale for location plan
+        location_scale = self.scale * 10.0
+
+        # Create property set
+        pset = self.create_drawing_pset(annotation, location_scale)
+        api.pset.edit_pset(
+            self.ifc_file,
+            pset=pset,
+            properties={
+                "TargetView": "PLAN_VIEW",
+                "Include": f'IfcSite + IfcRoof, IfcWall, IfcSlab, location="{building.Name}"',
+            },
+        )
+
+        self.set_location_properties(pset, location_x, location_y)
+
+        # Attach to sheet
+        self.attach_sheet(annotation, sheet_info, drawing_id)
+
+        # Create group
+        self.create_drawing_group(annotation)
+
+        # Update drawing ID and position for next drawing
+        drawing_id += 1
+        location_x += 10.0 + (self.dim_all_x * self.unit_scale_mm / location_scale)
+
+        return drawing_id, location_x
+
+    def generate_drawings(self):
+        """Generate all drawings for buildings"""
         sheet_id = 0
-        for building in natsorted(ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name):
 
-            # drawing sheet
+        for building in self.buildings:
+            # Create sheet for the building
             sheet_id += 1
-            identification = "A" + str(sheet_id).zfill(3)
+            identification = f"A{str(sheet_id).zfill(3)}"
+            sheet_info = self.create_sheet_info(identification, building.Name)
 
-            sheet_info = ifc_file.createIfcDocumentInformation(
-                identification,
-                building.Name,
-                "General Arrangement",
-                None,
-                None,
-                None,
-                "SHEET",
-            )
+            # Calculate building bounding box and dimensions
+            building_bbox = GeometryUtils.get_bbox(self.ifc_file, [building])
+            bbox_min, bbox_mid, bbox_max = building_bbox
 
-            rel = api.root.create_entity(ifc_file, ifc_class="IfcRelAssociatesDocument")
-            rel.RelatedObjects = ifc_file.by_type("IfcProject")
-            rel.RelatingDocument = sheet_info
-
-            # FIXME don't use unsanitised IFC data for filenames
-            ifc_file.createIfcDocumentReference(
-                "layouts/" + identification + " - " + building.Name + ".svg",
-                None,
-                None,
-                "LAYOUT",
-                sheet_info,
-            )
-            ifc_file.createIfcDocumentReference(
-                "layouts/titleblocks/" + titleblock + ".svg",
-                None,
-                None,
-                "TITLEBLOCK",
-                sheet_info,
-            )
-
-            # size of building
-            bbox_min, bbox_mid, bbox_max = Endrawing.get_bbox(ifc_file, [building])
-            dim_x = bbox_max[0] - bbox_min[0] + 2
-            dim_y = bbox_max[1] - bbox_min[1] + 2
-            dim_z = bbox_max[2] - bbox_min[2] + 2
-
+            # Get all storeys for the building
             storeys = {}
             for ifc_storey in ifcopenshell.util.selector.filter_elements(
-                ifc_file, 'IfcBuildingStorey, location="' + building.Name + '"'
+                self.ifc_file, f'IfcBuildingStorey, location="{building.Name}"'
             ):
                 local_placement = ifcopenshell.util.placement.get_local_placement(
                     ifc_storey.ObjectPlacement
                 )
                 storeys[local_placement[2][3]] = ifc_storey
 
+            # Initial drawing position
             drawing_id = 0
-            location_x = 30.0
-            location_y = 30.0
+            location_x, location_y = 30.0, 30.0
+
+            # Create plan drawings for each storey
             for elevation in sorted(list(storeys.keys())):
                 storey = storeys[elevation]
-
-                point = ifc_file.createIfcCartesianPoint(
-                    [float(bbox_mid[0]), float(bbox_mid[1]), float(elevation + 1.8)]
+                drawing_id, location_x, annotation, group = self.create_plan_drawing(
+                    storey,
+                    building_bbox,
+                    self.scale,
+                    location_x,
+                    location_y,
+                    sheet_info,
+                    drawing_id,
                 )
-                local_placement = ifc_file.createIfcLocalPlacement(
-                    None, ifc_file.createIfcAxis2Placement3D(point, None, None)
-                )
-                annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
-                annotation.Name = storey.Name
-                annotation.ObjectType = "DRAWING"
-                annotation.ObjectPlacement = local_placement
-                annotation.Representation = Endrawing.create_camera_shape(
-                    ifc_file, dim_x, dim_y, 10.0
-                )
-                pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
-                api.pset.edit_pset(
-                    ifc_file,
-                    pset=pset,
-                    properties={
-                        "TargetView": "PLAN_VIEW",
-                    },
-                )
-                Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
-                drawing_id += 1
-                location_x += 10.0 + (dim_x * unit_scale_mm / scale)
-                Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
-                group = Endrawing.create_drawing_group(ifc_file, annotation)
 
-                if storey.IsDecomposedBy:
-                    for space in storey.IsDecomposedBy[0].RelatedObjects:
-                        # label all the spaces in this storey
-                        centroid = Endrawing.get_centroid(space)
-                        placement = ifc_file.createIfcLocalPlacement(
-                            None,
-                            ifc_file.createIfcAxis2Placement3D(
-                                ifc_file.createIfcCartesianPoint(
-                                    [centroid[0], centroid[1], float(elevation) + 0.1]
-                                ),
-                                ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
-                                ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
-                            ),
-                        )
+                # Add space labels
+                self.create_space_labels(storey, elevation, group)
 
-                        # room label
-                        annotation = api.root.create_entity(
-                            ifc_file, ifc_class="IfcAnnotation"
-                        )
-                        annotation.Name = "TEXT"
-                        annotation.ObjectType = "TEXT"
-                        annotation.ObjectPlacement = placement
-                        annotation.Representation = Endrawing.create_label_shape(
-                            ifc_file
-                        )
-
-                        api.group.assign_group(
-                            ifc_file,
-                            group=group,
-                            products=[annotation],
-                        )
-                        api.drawing.assign_product(
-                            ifc_file,
-                            relating_product=space,
-                            related_object=annotation,
-                        )
-                        pset = api.pset.add_pset(
-                            ifc_file,
-                            product=annotation,
-                            name="EPset_Annotation",
-                        )
-                        api.pset.edit_pset(
-                            ifc_file,
-                            pset=pset,
-                            properties={"Classes": "header"},
-                        )
-
+            # Position for elevation drawings
             location_x = 30.0
-            location_y = 30.0 + 20.0 + (dim_y * unit_scale_mm / scale)
+            location_y = (
+                30.0
+                + 20.0
+                + ((bbox_max[1] - bbox_min[1] + 2) * self.unit_scale_mm / self.scale)
+            )
 
-            # north elevation
-            point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_max[1]) + 0.5, float(bbox_mid[2])]
-            )
-            local_placement = ifc_file.createIfcLocalPlacement(
-                None,
-                ifc_file.createIfcAxis2Placement3D(
-                    point,
-                    ifc_file.createIfcDirection([0.0, 1.0, 0.0]),
-                    ifc_file.createIfcDirection([-1.0, 0.0, 0.0]),
-                ),
-            )
-            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
-            annotation.Name = building.Name + " NORTH"
-            annotation.ObjectType = "DRAWING"
-            annotation.ObjectPlacement = local_placement
-            annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_x, dim_z, dim_y - 1.0
-            )
-            pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
-            Endrawing.edit_pset_elevation(ifc_file, pset, building)
-            Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
-            drawing_id += 1
-            location_x += 10.0 + (dim_x * unit_scale_mm / scale)
-            Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
-            group = Endrawing.create_drawing_group(ifc_file, annotation)
+            # Create elevation drawings
+            for direction in ["NORTH", "SOUTH", "WEST", "EAST"]:
+                drawing_id, location_x = self.create_elevation_drawing(
+                    building,
+                    building_bbox,
+                    direction,
+                    location_x,
+                    location_y,
+                    sheet_info,
+                    drawing_id,
+                )
 
-            # south elevation
-            point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_min[1]) - 0.5, float(bbox_mid[2])]
-            )
-            local_placement = ifc_file.createIfcLocalPlacement(
-                None,
-                ifc_file.createIfcAxis2Placement3D(
-                    point,
-                    ifc_file.createIfcDirection([0.0, -1.0, 0.0]),
-                    ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
-                ),
-            )
-            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
-            annotation.Name = building.Name + " SOUTH"
-            annotation.ObjectType = "DRAWING"
-            annotation.ObjectPlacement = local_placement
-            annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_x, dim_z, dim_y - 1.0
-            )
-            pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
-            Endrawing.edit_pset_elevation(ifc_file, pset, building)
-            Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
-            drawing_id += 1
-            location_x += 10.0 + (dim_x * unit_scale_mm / scale)
-            Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
-            group = Endrawing.create_drawing_group(ifc_file, annotation)
+            # Create location plan if there's more than one building
+            if len(self.buildings) > 1:
+                drawing_id, location_x = self.create_location_plan(
+                    building, location_x, location_y, sheet_info, drawing_id
+                )
 
-            # west elevation
-            point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_min[0]) - 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
-            )
-            local_placement = ifc_file.createIfcLocalPlacement(
-                None,
-                ifc_file.createIfcAxis2Placement3D(
-                    point,
-                    ifc_file.createIfcDirection([-1.0, 0.0, 0.0]),
-                    ifc_file.createIfcDirection([0.0, -1.0, 0.0]),
-                ),
-            )
-            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
-            annotation.Name = building.Name + " WEST"
-            annotation.ObjectType = "DRAWING"
-            annotation.ObjectPlacement = local_placement
-            annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_y, dim_z, dim_x - 1.0
-            )
-            pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
-            Endrawing.edit_pset_elevation(ifc_file, pset, building)
-            Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
-            drawing_id += 1
-            location_x += 10.0 + (dim_y * unit_scale_mm / scale)
-            Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
-            group = Endrawing.create_drawing_group(ifc_file, annotation)
 
-            # east elevation
-            point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_max[0]) + 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
-            )
-            local_placement = ifc_file.createIfcLocalPlacement(
-                None,
-                ifc_file.createIfcAxis2Placement3D(
-                    point,
-                    ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
-                    ifc_file.createIfcDirection([0.0, 1.0, 0.0]),
-                ),
-            )
-            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
-            annotation.Name = building.Name + " EAST"
-            annotation.ObjectType = "DRAWING"
-            annotation.ObjectPlacement = local_placement
-            annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_y, dim_z, dim_x - 1.0
-            )
-            pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale)
-            Endrawing.edit_pset_elevation(ifc_file, pset, building)
-            Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
-            drawing_id += 1
-            location_x += 10.0 + (dim_y * unit_scale_mm / scale)
-            Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
-            group = Endrawing.create_drawing_group(ifc_file, annotation)
+def main():
+    """Main function"""
+    try:
+        import bonsai.tool
 
-            # location plan
-            # FIXME only draw if more than one building
-            point = ifc_file.createIfcCartesianPoint(
-                [float(bbox_all_mid[0]), float(bbox_all_mid[1]), float(bbox_all_max[2] + 1.0)]
-            )
-            local_placement = ifc_file.createIfcLocalPlacement(
-                None, ifc_file.createIfcAxis2Placement3D(point, None, None)
-            )
-            annotation = api.root.create_entity(ifc_file, ifc_class="IfcAnnotation")
-            annotation.Name = building.Name + " LOCATION"
-            annotation.ObjectType = "DRAWING"
-            annotation.ObjectPlacement = local_placement
-            annotation.Representation = Endrawing.create_camera_shape(
-                ifc_file, dim_all_x, dim_all_y, dim_all_z
-            )
-            pset = Endrawing.create_epset_drawing(ifc_file, annotation, scale * 10.0)
-            api.pset.edit_pset(
-                ifc_file,
-                pset=pset,
-                properties={
-                    "TargetView": "PLAN_VIEW",
-                    "Include": 'IfcSite + IfcRoof, IfcWall, IfcSlab, location="'
-                    + building.Name
-                    + '"',
-                },
-            )
-            Endrawing.edit_pset_location(ifc_file, pset, location_x, location_y)
-            drawing_id += 1
-            location_x += 10.0 + (dim_all_x * unit_scale_mm / (scale * 10.0))
-            Endrawing.attach_sheet(ifc_file, annotation, sheet_info, drawing_id)
-            group = Endrawing.create_drawing_group(ifc_file, annotation)
-
-            # FIXME add storey SECTION_LEVEL lines
+        # Running in Bonsai BIM
+        generator = DrawingGenerator(bonsai.tool.Ifc.get())
+        generator.generate_drawings()
+    except ImportError:
+        if len(sys.argv) != 3:
+            print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
+            sys.exit(1)
+        else:
+            # Running from command line
+            ifc_file = ifcopenshell.open(sys.argv[1])
+            generator = DrawingGenerator(ifc_file)
+            generator.generate_drawings()
+            ifc_file.write(sys.argv[2])
 
 
 if __name__ == "__main__":
-    try:
-        import bonsai.tool
-    except ImportError:
-        if not len(sys.argv) == 3:
-            print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
-        else:
-            ifc_file = ifcopenshell.open(sys.argv[1])
-            Endrawing.execute(ifc_file)
-            ifc_file.write(sys.argv[2])
-    else:
-        # running in Bonsai BIM
-        Endrawing.execute(bonsai.tool.Ifc.get())
+    main()
