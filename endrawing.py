@@ -326,26 +326,6 @@ class DrawingGenerator:
             },
         )
 
-    def set_location_properties(self, pset, x, y):
-        """Set position properties
-
-        Args:
-            pset: The property set
-            x, y: Position coordinates
-
-        FIXME This is the location of the drawing on the sheet, but note that a
-        drawing could appear on multiple sheets so attaching this to the drawing
-        is wrong.
-        """
-        api.pset.edit_pset(
-            self.ifc_file,
-            pset=pset,
-            properties={
-                "PositionX": float(x),
-                "PositionY": float(y),
-            },
-        )
-
     def create_drawing_group(self, annotation):
         """Create a drawing group
 
@@ -522,9 +502,6 @@ class DrawingGenerator:
             },
         )
 
-        # Set position
-        self.set_location_properties(pset, location_x, location_y)
-
         # Attach to sheet
         self.attach_sheet(annotation, sheet_info, drawing_id)
 
@@ -678,7 +655,6 @@ class DrawingGenerator:
         # Create property set
         pset = self.create_drawing_pset(annotation, self.scale)
         self.set_elevation_properties(pset, building)
-        self.set_location_properties(pset, location_x, location_y)
 
         # Attach to sheet
         self.attach_sheet(annotation, sheet_info, drawing_id)
@@ -742,8 +718,6 @@ class DrawingGenerator:
                 "Include": f'IfcSite + IfcRoof, IfcWall, IfcSlab, location="{building.Name}"',
             },
         )
-
-        self.set_location_properties(pset, location_x, location_y)
 
         # Attach to sheet
         self.attach_sheet(annotation, sheet_info, drawing_id)
