@@ -446,8 +446,6 @@ class DrawingGenerator:
         storey,
         building_bbox,
         scale,
-        location_x,
-        location_y,
         sheet_info,
         drawing_id,
     ):
@@ -457,12 +455,11 @@ class DrawingGenerator:
             storey: The building storey
             building_bbox: Building bounding box tuple
             scale: Drawing scale
-            location_x, location_y: Drawing position
             sheet_info: Sheet document information
             drawing_id: Drawing ID
 
         Returns:
-            Tuple of (new_drawing_id, new_location_x, annotation, group)
+            Tuple of (new_drawing_id, annotation, group)
         """
         bbox_min, bbox_mid, bbox_max = building_bbox
         dim_x = bbox_max[0] - bbox_min[0] + 2
@@ -510,9 +507,7 @@ class DrawingGenerator:
 
         # Update drawing ID and position for next drawing
         drawing_id += 1
-        location_x += 10.0 + (dim_x * self.unit_scale_mm / scale)
-
-        return drawing_id, location_x, annotation, group
+        return drawing_id, annotation, group
 
     def create_space_labels(self, storey, elevation, group):
         """Create labels for spaces in a storey
@@ -581,8 +576,6 @@ class DrawingGenerator:
         building,
         building_bbox,
         direction,
-        location_x,
-        location_y,
         sheet_info,
         drawing_id,
     ):
@@ -592,12 +585,11 @@ class DrawingGenerator:
             building: The building element
             building_bbox: Building bounding box tuple
             direction: Elevation direction ("NORTH", "SOUTH", "EAST", "WEST")
-            location_x, location_y: Drawing position
             sheet_info: Sheet document information
             drawing_id: Drawing ID
 
         Returns:
-            Tuple of (new_drawing_id, new_location_x)
+            new_drawing_id
         """
         bbox_min, bbox_mid, bbox_max = building_bbox
         dim_x = bbox_max[0] - bbox_min[0] + 2
@@ -664,23 +656,21 @@ class DrawingGenerator:
 
         # Update drawing ID and position for next drawing
         drawing_id += 1
-        location_x += 10.0 + (camera_dims[0] * self.unit_scale_mm / self.scale)
 
-        return drawing_id, location_x
+        return drawing_id
 
     def create_location_plan(
-        self, building, location_x, location_y, sheet_info, drawing_id
+        self, building, sheet_info, drawing_id
     ):
         """Create a location plan drawing
 
         Args:
             building: The building element
-            location_x, location_y: Drawing position
             sheet_info: Sheet document information
             drawing_id: Drawing ID
 
         Returns:
-            Tuple of (new_drawing_id, new_location_x)
+            new_drawing_id
         """
         # Create point at center of all buildings, above max height
         point = self.ifc_file.createIfcCartesianPoint(
@@ -727,9 +717,8 @@ class DrawingGenerator:
 
         # Update drawing ID and position for next drawing
         drawing_id += 1
-        location_x += 10.0 + (self.dim_all_x * self.unit_scale_mm / location_scale)
 
-        return drawing_id, location_x
+        return drawing_id
 
     def generate_drawings(self):
         """Generate all drawings for buildings"""
@@ -758,17 +747,14 @@ class DrawingGenerator:
 
             # Initial drawing position
             drawing_id = 0
-            location_x, location_y = 30.0, 30.0
 
             # Create plan drawings for each storey
             for elevation in sorted(list(storeys.keys())):
                 storey = storeys[elevation]
-                drawing_id, location_x, annotation, group = self.create_plan_drawing(
+                drawing_id, annotation, group = self.create_plan_drawing(
                     storey,
                     building_bbox,
                     self.scale,
-                    location_x,
-                    location_y,
                     sheet_info,
                     drawing_id,
                 )
@@ -776,30 +762,20 @@ class DrawingGenerator:
                 # Add space labels
                 self.create_space_labels(storey, elevation, group)
 
-            # Position for elevation drawings
-            location_x = 30.0
-            location_y = (
-                30.0
-                + 20.0
-                + ((bbox_max[1] - bbox_min[1] + 2) * self.unit_scale_mm / self.scale)
-            )
-
             # Create elevation drawings
             for direction in ["NORTH", "SOUTH", "WEST", "EAST"]:
-                drawing_id, location_x = self.create_elevation_drawing(
+                drawing_id = self.create_elevation_drawing(
                     building,
                     building_bbox,
                     direction,
-                    location_x,
-                    location_y,
                     sheet_info,
                     drawing_id,
                 )
 
             # Create location plan if there's more than one building
             if len(self.buildings) > 1:
-                drawing_id, location_x = self.create_location_plan(
-                    building, location_x, location_y, sheet_info, drawing_id
+                drawing_id = self.create_location_plan(
+                    building, sheet_info, drawing_id
                 )
 
 
