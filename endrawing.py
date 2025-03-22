@@ -505,7 +505,7 @@ class DrawingGenerator:
         # Create group
         group = self.create_drawing_group(annotation)
 
-        # Update drawing ID and position for next drawing
+        # Update drawing ID for next drawing
         drawing_id += 1
         return drawing_id, annotation, group
 
@@ -654,7 +654,7 @@ class DrawingGenerator:
         # Create group
         self.create_drawing_group(annotation)
 
-        # Update drawing ID and position for next drawing
+        # Update drawing ID for next drawing
         drawing_id += 1
 
         return drawing_id
@@ -715,7 +715,7 @@ class DrawingGenerator:
         # Create group
         self.create_drawing_group(annotation)
 
-        # Update drawing ID and position for next drawing
+        # Update drawing ID for next drawing
         drawing_id += 1
 
         return drawing_id
@@ -745,7 +745,6 @@ class DrawingGenerator:
                 )
                 storeys[local_placement[2][3]] = ifc_storey
 
-            # Initial drawing position
             drawing_id = 0
 
             # Create plan drawings for each storey
