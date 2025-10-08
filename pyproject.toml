@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "endrawing"
+version = "0.1.0"
+description = "Creates General Arrangement drawings for IFC buildings"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "GPL-3.0-or-later"}
+authors = [
+    {name = "Bruno Postle", email = "bruno@postle.net"}
+]
+keywords = ["IFC", "BIM", "drawings", "architecture"]
+
+dependencies = [
+    "ifcopenshell",
+    "natsort",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+]
+
+[project.scripts]
+endrawing = "endrawing:main"
+
+[tool.setuptools]
+py-modules = ["endrawing"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
