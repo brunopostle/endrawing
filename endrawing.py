@@ -5,6 +5,7 @@ from natsort import natsorted
 import ifcopenshell
 import ifcopenshell.api as api
 import ifcopenshell.api.context
+import ifcopenshell.api.document
 import ifcopenshell.api.drawing
 import ifcopenshell.api.group
 import ifcopenshell.api.pset
@@ -15,6 +16,7 @@ import ifcopenshell.util.selector
 import ifcopenshell.util.representation
 import ifcopenshell.util.placement
 import ifcopenshell.util.unit
+import ifcopenshell.util.element
 
 # 2024 Bruno Postle <bruno@postle.net>
 # License: SPDX:GPL-3.0-or-later
@@ -254,6 +256,16 @@ class DrawingGenerator:
             titleblock: Titleblock size (default "A2")
         """
         self.ifc_file = ifc_file
+
+        # Validate basic requirements
+        buildings = ifc_file.by_type("IfcBuilding")
+        if not buildings:
+            raise ValueError("No IfcBuilding entities found in IFC file")
+
+        model_context = ifcopenshell.util.representation.get_context(ifc_file, "Model")
+        if not model_context:
+            raise ValueError("No Model context found in IFC file")
+
         self.scale = scale
         self.titleblock = titleblock
         self.contexts = ContextManager.ensure_contexts(ifc_file)
@@ -292,6 +304,7 @@ class DrawingGenerator:
             self.ifc_file,
             pset=pset,
             properties={
+                "GeneratedBy": "endrawing",
                 "TargetView": "PLAN_VIEW",
                 "Scale": f"1/{scale_str}",
                 "HumanScale": f"1:{scale_str}",
@@ -411,7 +424,7 @@ class DrawingGenerator:
             building_name,
             "General Arrangement",
             None,
-            None,
+            "General Arrangement",  # Purpose
             None,
             "SHEET",
         )
@@ -568,7 +581,10 @@ class DrawingGenerator:
             api.pset.edit_pset(
                 self.ifc_file,
                 pset=pset,
-                properties={"Classes": "header"},
+                properties={
+                    "GeneratedBy": "endrawing",
+                    "Classes": "header",
+                },
             )
 
     def create_elevation_drawing(
@@ -720,8 +736,91 @@ class DrawingGenerator:
 
         return drawing_id
 
+    def cleanup_existing_drawings(self):
+        """Remove all endrawing-generated drawings and sheets"""
+        # Find all annotations with our marker (in either EPset_Drawing or EPset_Annotation)
+        to_remove = []
+        for annotation in self.ifc_file.by_type("IfcAnnotation"):
+            psets = ifcopenshell.util.element.get_psets(annotation)
+            if (psets.get("EPset_Drawing", {}).get("GeneratedBy") == "endrawing" or
+                psets.get("EPset_Annotation", {}).get("GeneratedBy") == "endrawing"):
+                to_remove.append(annotation)
+
+        # Remove annotations using proper API (handles relationships automatically)
+        for annotation in to_remove:
+            try:
+                api.root.remove_product(self.ifc_file, product=annotation)
+            except (RuntimeError, AttributeError) as e:
+                # Element may already be removed or invalid
+                pass
+
+        # Clean up orphaned IfcRelAssociatesDocument relationships with empty RelatedObjects
+        for rel in list(self.ifc_file.by_type("IfcRelAssociatesDocument")):
+            if not rel.RelatedObjects or len(rel.RelatedObjects) == 0:
+                try:
+                    self.ifc_file.remove(rel)
+                except (RuntimeError, AttributeError):
+                    pass
+            elif rel.RelatingDocument is None:
+                # Also remove relationships with null documents
+                try:
+                    self.ifc_file.remove(rel)
+                except (RuntimeError, AttributeError):
+                    pass
+
+        # Find and remove orphaned groups (groups with no related objects)
+        # After removing products, some groups may be empty
+        for group in list(self.ifc_file.by_type("IfcGroup")):
+            if group.ObjectType == "DRAWING":
+                # Check if group has any related objects
+                has_objects = False
+                for rel in self.ifc_file.by_type("IfcRelAssignsToGroup"):
+                    if rel.RelatingGroup == group and len(rel.RelatedObjects or []) > 0:
+                        has_objects = True
+                        break
+                if not has_objects:
+                    try:
+                        api.group.remove_group(self.ifc_file, group=group)
+                    except (RuntimeError, AttributeError, TypeError):
+                        pass
+
+        # Find and remove orphaned sheet documents
+        for doc_info in list(self.ifc_file.by_type("IfcDocumentInformation")):
+            if hasattr(doc_info, "Purpose") and doc_info.Purpose == "General Arrangement":
+                # Check if any drawings still reference this sheet
+                has_drawings = False
+                for rel in self.ifc_file.by_type("IfcRelAssociatesDocument"):
+                    # Check if relationship references a drawing that still exists
+                    if rel.RelatedObjects and len(rel.RelatedObjects) > 0:
+                        doc = rel.RelatingDocument
+                        if doc and doc.is_a("IfcDocumentReference") and hasattr(doc, "ReferencedDocument"):
+                            if doc.ReferencedDocument == doc_info:
+                                has_drawings = True
+                                break
+
+                if not has_drawings:
+                    # Remove document references first (using proper API)
+                    refs_to_remove = []
+                    for ref in self.ifc_file.by_type("IfcDocumentReference"):
+                        if hasattr(ref, "ReferencedDocument") and ref.ReferencedDocument == doc_info:
+                            refs_to_remove.append(ref)
+
+                    for ref in refs_to_remove:
+                        try:
+                            api.document.remove_reference(self.ifc_file, reference=ref)
+                        except (RuntimeError, AttributeError, TypeError):
+                            pass
+
+                    # Remove the document info (using proper API)
+                    try:
+                        api.document.remove_information(self.ifc_file, information=doc_info)
+                    except (RuntimeError, AttributeError, TypeError):
+                        pass
+
     def generate_drawings(self):
         """Generate all drawings for buildings"""
+        self.cleanup_existing_drawings()
+
         sheet_id = 0
 
         for building in self.buildings:
@@ -783,19 +882,38 @@ def main():
     try:
         import bonsai.tool
 
-        # Running in Bonsai BIM
+        # Running in Bonsai BIM - use defaults
         generator = DrawingGenerator(bonsai.tool.Ifc.get())
         generator.generate_drawings()
     except ImportError:
-        if len(sys.argv) != 3:
-            print("Usage: " + sys.argv[0] + " input.ifc output.ifc")
-            sys.exit(1)
-        else:
-            # Running from command line
-            ifc_file = ifcopenshell.open(sys.argv[1])
-            generator = DrawingGenerator(ifc_file)
-            generator.generate_drawings()
-            ifc_file.write(sys.argv[2])
+        # Running from command line - parse arguments
+        import argparse
+
+        parser = argparse.ArgumentParser(
+            description="Generate General Arrangement drawings for IFC buildings"
+        )
+        parser.add_argument("input", help="Input IFC file")
+        parser.add_argument("output", help="Output IFC file")
+        parser.add_argument(
+            "--scale",
+            type=int,
+            default=100,
+            help="Drawing scale denominator (default: 100 for 1:100)",
+        )
+        parser.add_argument(
+            "--titleblock", default="A2", help="Titleblock size (default: A2)"
+        )
+
+        args = parser.parse_args()
+
+        # Process
+        ifc_file = ifcopenshell.open(args.input)
+        generator = DrawingGenerator(
+            ifc_file, scale=args.scale, titleblock=args.titleblock
+        )
+        generator.generate_drawings()
+        ifc_file.write(args.output)
+        print(f"Generated drawings and sheets in {args.output}")
 
 
 if __name__ == "__main__":
