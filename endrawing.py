@@ -269,9 +269,8 @@ class DrawingGenerator:
         self.scale = scale
         self.titleblock = titleblock
         self.contexts = ContextManager.ensure_contexts(ifc_file)
-        self.unit_scale_mm = (
-            ifcopenshell.util.unit.calculate_unit_scale(ifc_file) * 1000.0
-        )
+        # To convert meters to project units: project_units = meters / unit_scale
+        self.unit_scale = ifcopenshell.util.unit.calculate_unit_scale(ifc_file)
 
         # Calculate overall bounding box for site plan
         self.buildings = natsorted(
@@ -280,10 +279,10 @@ class DrawingGenerator:
         self.bbox_all = GeometryUtils.get_bbox(ifc_file, self.buildings)
         self.bbox_all_min, self.bbox_all_mid, self.bbox_all_max = self.bbox_all
 
-        # Calculate dimensions
-        self.dim_all_x = self.bbox_all_max[0] - self.bbox_all_min[0] + 2
-        self.dim_all_y = self.bbox_all_max[1] - self.bbox_all_min[1] + 2
-        self.dim_all_z = self.bbox_all_max[2] - self.bbox_all_min[2] + 2
+        # Calculate dimensions (add 2 meters padding in project units)
+        self.dim_all_x = self.bbox_all_max[0] - self.bbox_all_min[0] + 2.0 / self.unit_scale
+        self.dim_all_y = self.bbox_all_max[1] - self.bbox_all_min[1] + 2.0 / self.unit_scale
+        self.dim_all_z = self.bbox_all_max[2] - self.bbox_all_min[2] + 2.0 / self.unit_scale
 
     def create_drawing_pset(self, annotation, scale=50):
         """Create EPset_Drawing property set
@@ -475,8 +474,8 @@ class DrawingGenerator:
             Tuple of (new_drawing_id, annotation, group)
         """
         bbox_min, bbox_mid, bbox_max = building_bbox
-        dim_x = bbox_max[0] - bbox_min[0] + 2
-        dim_y = bbox_max[1] - bbox_min[1] + 2
+        dim_x = bbox_max[0] - bbox_min[0] + 2.0 / self.unit_scale
+        dim_y = bbox_max[1] - bbox_min[1] + 2.0 / self.unit_scale
 
         # Get elevation from storey placement
         local_placement = ifcopenshell.util.placement.get_local_placement(
@@ -484,22 +483,22 @@ class DrawingGenerator:
         )
         elevation = local_placement[2][3]
 
-        # Create camera position
+        # Create camera position (1.8 meters above floor in project units)
         point = self.ifc_file.createIfcCartesianPoint(
-            [float(bbox_mid[0]), float(bbox_mid[1]), float(elevation + 1.8)]
+            [float(bbox_mid[0]), float(bbox_mid[1]), float(elevation + 1.8 / self.unit_scale)]
         )
 
         local_placement = self.ifc_file.createIfcLocalPlacement(
             None, self.ifc_file.createIfcAxis2Placement3D(point, None, None)
         )
 
-        # Create annotation
+        # Create annotation (camera volume depth 10 meters in project units)
         annotation = api.root.create_entity(self.ifc_file, ifc_class="IfcAnnotation")
         annotation.Name = storey.Name
         annotation.ObjectType = "DRAWING"
         annotation.ObjectPlacement = local_placement
         annotation.Representation = ShapeCreator.create_camera_shape(
-            self.ifc_file, dim_x, dim_y, 10.0
+            self.ifc_file, dim_x, dim_y, 10.0 / self.unit_scale
         )
 
         # Create property set
@@ -537,12 +536,12 @@ class DrawingGenerator:
             # Get space centroid
             centroid = GeometryUtils.get_centroid(space)
 
-            # Create placement
+            # Create placement (0.1 meters above floor in project units)
             placement = self.ifc_file.createIfcLocalPlacement(
                 None,
                 self.ifc_file.createIfcAxis2Placement3D(
                     self.ifc_file.createIfcCartesianPoint(
-                        [centroid[0], centroid[1], float(elevation) + 0.1]
+                        [centroid[0], centroid[1], float(elevation) + 0.1 / self.unit_scale]
                     ),
                     self.ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
                     self.ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
@@ -608,42 +607,45 @@ class DrawingGenerator:
             new_drawing_id
         """
         bbox_min, bbox_mid, bbox_max = building_bbox
-        dim_x = bbox_max[0] - bbox_min[0] + 2
-        dim_y = bbox_max[1] - bbox_min[1] + 2
-        dim_z = bbox_max[2] - bbox_min[2] + 2
+        dim_x = bbox_max[0] - bbox_min[0] + 2.0 / self.unit_scale
+        dim_y = bbox_max[1] - bbox_min[1] + 2.0 / self.unit_scale
+        dim_z = bbox_max[2] - bbox_min[2] + 2.0 / self.unit_scale
 
-        # Set up direction-specific parameters
+        # Set up direction-specific parameters (0.5m offset, 1m depth in project units)
+        offset = 0.5 / self.unit_scale
+        depth = 1.0 / self.unit_scale
+
         if direction == "NORTH":
             point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_max[1]) + 0.5, float(bbox_mid[2])]
+                [float(bbox_mid[0]), float(bbox_max[1]) + offset, float(bbox_mid[2])]
             )
             axis_dir = self.ifc_file.createIfcDirection([0.0, 1.0, 0.0])
             ref_dir = self.ifc_file.createIfcDirection([-1.0, 0.0, 0.0])
-            camera_dims = (dim_x, dim_z, dim_y - 1.0)
+            camera_dims = (dim_x, dim_z, dim_y - depth)
 
         elif direction == "SOUTH":
             point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_min[1]) - 0.5, float(bbox_mid[2])]
+                [float(bbox_mid[0]), float(bbox_min[1]) - offset, float(bbox_mid[2])]
             )
             axis_dir = self.ifc_file.createIfcDirection([0.0, -1.0, 0.0])
             ref_dir = self.ifc_file.createIfcDirection([1.0, 0.0, 0.0])
-            camera_dims = (dim_x, dim_z, dim_y - 1.0)
+            camera_dims = (dim_x, dim_z, dim_y - depth)
 
         elif direction == "WEST":
             point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_min[0]) - 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
+                [float(bbox_min[0]) - offset, float(bbox_mid[1]), float(bbox_mid[2])]
             )
             axis_dir = self.ifc_file.createIfcDirection([-1.0, 0.0, 0.0])
             ref_dir = self.ifc_file.createIfcDirection([0.0, -1.0, 0.0])
-            camera_dims = (dim_y, dim_z, dim_x - 1.0)
+            camera_dims = (dim_y, dim_z, dim_x - depth)
 
         elif direction == "EAST":
             point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_max[0]) + 0.5, float(bbox_mid[1]), float(bbox_mid[2])]
+                [float(bbox_max[0]) + offset, float(bbox_mid[1]), float(bbox_mid[2])]
             )
             axis_dir = self.ifc_file.createIfcDirection([1.0, 0.0, 0.0])
             ref_dir = self.ifc_file.createIfcDirection([0.0, 1.0, 0.0])
-            camera_dims = (dim_y, dim_z, dim_x - 1.0)
+            camera_dims = (dim_y, dim_z, dim_x - depth)
 
         # Create placement
         local_placement = self.ifc_file.createIfcLocalPlacement(
@@ -688,12 +690,12 @@ class DrawingGenerator:
         Returns:
             new_drawing_id
         """
-        # Create point at center of all buildings, above max height
+        # Create point at center of all buildings, above max height (1 meter in project units)
         point = self.ifc_file.createIfcCartesianPoint(
             [
                 float(self.bbox_all_mid[0]),
                 float(self.bbox_all_mid[1]),
-                float(self.bbox_all_max[2] + 1.0),
+                float(self.bbox_all_max[2] + 1.0 / self.unit_scale),
             ]
         )
 

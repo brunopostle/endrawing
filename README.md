@@ -7,6 +7,7 @@ Each building gets a sheet with plans and north, south, east and west elevations
 ## Features
 
 - **Automatic drawing generation**: Creates plan and elevation drawings for all buildings
+- **Universal unit support**: Works with metric (m, mm, cm) and imperial (ft, in) or any IFC-defined units
 - **Idempotent operation**: Re-running updates existing drawings without creating duplicates
 - **Safe**: Only modifies drawings it created, preserves all other project content
 - **Configurable**: Supports custom scales and titleblock sizes via command-line arguments
@@ -60,7 +61,6 @@ All generated content is marked with `GeneratedBy: "endrawing"` in the EPset_Dra
 
 ## Limitations
 
-- **Metric units**: Camera positioning assumes project coordinates are in meters. Imperial projects (feet/inches) will have incorrectly positioned cameras.
 - **Building rotation**: Bounding box calculation doesn't account for rotated buildings in their local coordinate system.
 
 ## Development
