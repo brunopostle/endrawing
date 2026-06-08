@@ -280,7 +280,7 @@ class DrawingGenerator:
 
         # Calculate overall bounding box for site plan
         self.buildings = natsorted(
-            ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name
+            ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name or ""
         )
         self.bbox_all = GeometryUtils.get_bbox(ifc_file, self.buildings)
         self.bbox_all_min, self.bbox_all_mid, self.bbox_all_max = self.bbox_all
@@ -539,8 +539,12 @@ class DrawingGenerator:
             return
 
         for space in storey.IsDecomposedBy[0].RelatedObjects:
-            # Get space centroid
-            centroid = GeometryUtils.get_centroid(space)
+            # Get space centroid. Spaces without a geometry representation make
+            # create_shape raise; skip them rather than aborting the whole run.
+            try:
+                centroid = GeometryUtils.get_centroid(space)
+            except RuntimeError:
+                continue
 
             # Create placement (0.1 meters above floor in project units)
             placement = self.ifc_file.createIfcLocalPlacement(
@@ -842,21 +846,23 @@ class DrawingGenerator:
             building_bbox = GeometryUtils.get_bbox(self.ifc_file, [building])
             bbox_min, bbox_mid, bbox_max = building_bbox
 
-            # Get all storeys for the building
-            storeys = {}
+            # Collect storeys as (elevation, storey) pairs rather than a dict
+            # keyed by elevation, so two storeys sharing an elevation
+            # (mezzanines, split levels) don't overwrite each other. Sort by
+            # elevation separately below.
+            storeys = []
             for ifc_storey in ifcopenshell.util.selector.filter_elements(
                 self.ifc_file, f'IfcBuildingStorey, location="{building.Name}"'
             ):
                 local_placement = ifcopenshell.util.placement.get_local_placement(
                     ifc_storey.ObjectPlacement
                 )
-                storeys[local_placement[2][3]] = ifc_storey
+                storeys.append((local_placement[2][3], ifc_storey))
 
             drawing_id = 0
 
             # Create plan drawings for each storey
-            for elevation in sorted(list(storeys.keys())):
-                storey = storeys[elevation]
+            for elevation, storey in sorted(storeys, key=lambda s: s[0]):
                 drawing_id, annotation, group = self.create_plan_drawing(
                     storey,
                     building_bbox,
