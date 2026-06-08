@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "endrawing",
+  "project_id": "96e9dbe9-771a-4746-be7a-ad1cd97fe5ad"
+}
