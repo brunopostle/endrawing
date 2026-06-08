@@ -91,8 +91,8 @@ class GeometryUtils:
         Returns:
             Tuple of (min_point, mid_point, max_point)
         """
-        bbox_min = []
-        bbox_max = []
+        bbox_min = None
+        bbox_max = None
 
         for spatial_element in spatial_elements:
             items = ifcopenshell.util.selector.filter_elements(
@@ -109,14 +109,14 @@ class GeometryUtils:
                     local_placement[2][3],
                 )
 
-                if x == 0.0 or y == 0.0:
+                # Skip only elements sitting at the true world origin, which
+                # are typically unplaced. Elements legitimately placed on a
+                # single world axis (e.g. on x=0 at the grid origin) are kept.
+                if x == 0.0 and y == 0.0 and z == 0.0:
                     continue
 
-                if not bbox_min:
+                if bbox_min is None:
                     bbox_min = [x, y, z]
-                    continue
-
-                if not bbox_max:
                     bbox_max = [x, y, z]
                     continue
 
@@ -127,6 +127,12 @@ class GeometryUtils:
                 bbox_max[0] = max(bbox_max[0], x)
                 bbox_max[1] = max(bbox_max[1], y)
                 bbox_max[2] = max(bbox_max[2], z)
+
+        # No validly placed elements found: return a degenerate bbox at the
+        # origin rather than crashing in the midpoint calculation below.
+        if bbox_min is None:
+            bbox_min = [0.0, 0.0, 0.0]
+            bbox_max = [0.0, 0.0, 0.0]
 
         # Calculate midpoint
         bbox_mid = [
