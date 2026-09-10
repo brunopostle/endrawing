@@ -47,7 +47,8 @@ endrawing input.ifc output.ifc --scale 200
 
 Endrawing generates:
 - One plan drawing per building storey
-- Four elevation drawings (NORTH, SOUTH, EAST, WEST) per building
+- Four elevation drawings per building, square on to its faces and named by the nearest compass point to true north (NORTH, SOUTH, EAST and WEST, or NORTH-EAST etc. for buildings turned nearer 45 degrees)
+- Plans and elevations follow the building's own axes, taken from its placement, so a rotated building's plans sit square on the sheet
 - Optional location plan (when multiple buildings exist)
 - One A-series sheet per building containing all its drawings
 
@@ -61,7 +62,7 @@ All generated content is marked with `GeneratedBy: "endrawing"` in the EPset_Dra
 
 ## Limitations
 
-- **Building rotation**: Bounding box calculation doesn't account for rotated buildings in their local coordinate system.
+- **North arrows on rotated plans**: Plans of rotated buildings aren't north up, but Bonsai's titleblock north arrow only follows the project's true north, so on those sheets it's off by the building's rotation.
 
 ## Development
 

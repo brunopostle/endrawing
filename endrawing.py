@@ -19,6 +19,7 @@ import ifcopenshell.util.placement
 import ifcopenshell.util.shape
 import ifcopenshell.util.unit
 import ifcopenshell.util.element
+import ifcopenshell.util.geolocation
 
 # 2024 Bruno Postle <bruno@postle.net>
 # License: SPDX:GPL-3.0-or-later
@@ -71,6 +72,18 @@ IMPERIAL_HUMAN_SCALES = {
     4800: "1\"=400'",
     6000: "1\"=500'",
 }
+
+# Elevation names, clockwise from true north in 45 degree steps
+COMPASS_POINTS = [
+    "NORTH",
+    "NORTH-EAST",
+    "EAST",
+    "SOUTH-EAST",
+    "SOUTH",
+    "SOUTH-WEST",
+    "WEST",
+    "NORTH-WEST",
+]
 
 
 class ContextManager:
@@ -186,12 +199,64 @@ class GeometryUtils:
                 break
 
     @staticmethod
-    def get_element_bounds(ifc_file, elements):
-        """Calculate world bounding boxes of element geometry
+    def get_rotation(element):
+        """Get the rotation about z of an element's absolute placement
+
+        This includes rotations of the placements it's relative to, such as
+        a rotated site above a building.
+
+        Args:
+            element: The element, typically an IfcBuilding
+
+        Returns:
+            3x3 matrix whose columns are the element's x, y and z axes in
+            world coordinates, or None if it isn't rotated
+        """
+        matrix = ifcopenshell.util.placement.get_local_placement(
+            element.ObjectPlacement
+        )
+        angle = np.arctan2(matrix[1][0], matrix[0][0])
+        if abs(angle) < 1e-9:
+            return None
+        cos, sin = np.cos(angle), np.sin(angle)
+        return np.array([[cos, -sin, 0.0], [sin, cos, 0.0], [0.0, 0.0, 1.0]])
+
+    @staticmethod
+    def get_oriented_element_bounds(ifc_file, elements, rotations):
+        """Calculate bounding boxes of element geometry, some of them rotated
 
         Tessellates all elements in one multithreaded iterator pass and takes
         min/max over each vertex buffer with numpy, so no per-vertex Python
-        loop is involved.
+        loop is involved. Rotating the vertices before taking min/max gives a
+        tighter box than rotating a world-aligned box.
+
+        Args:
+            ifc_file: The IFC file
+            elements: Iterable of IfcElements
+            rotations: Dict of {element id: rotation from get_rotation()}
+
+        Returns:
+            Tuple of two dicts of {element id: (min_xyz, max_xyz)} in project
+            units: world-aligned boxes for all elements, and boxes aligned to
+            the rotated axes, in coordinates along those axes, for elements in
+            rotations. Elements without body geometry are absent.
+        """
+        bounds = {}
+        oriented_bounds = {}
+        for shape in GeometryUtils.iterate_shapes(ifc_file, elements):
+            verts = ifcopenshell.util.shape.get_vertices(shape.geometry)
+            if not len(verts):
+                continue
+            bounds[shape.id] = (verts.min(axis=0), verts.max(axis=0))
+            rotation = rotations.get(shape.id)
+            if rotation is not None:
+                verts = verts @ rotation
+                oriented_bounds[shape.id] = (verts.min(axis=0), verts.max(axis=0))
+        return bounds, oriented_bounds
+
+    @staticmethod
+    def get_element_bounds(ifc_file, elements):
+        """Calculate world bounding boxes of element geometry
 
         Args:
             ifc_file: The IFC file
@@ -201,15 +266,10 @@ class GeometryUtils:
             Dict of {element id: (min_xyz, max_xyz)} in project units. Elements
             without body geometry are absent.
         """
-        bounds = {}
-        for shape in GeometryUtils.iterate_shapes(ifc_file, elements):
-            verts = ifcopenshell.util.shape.get_vertices(shape.geometry)
-            if len(verts):
-                bounds[shape.id] = (verts.min(axis=0), verts.max(axis=0))
-        return bounds
+        return GeometryUtils.get_oriented_element_bounds(ifc_file, elements, {})[0]
 
     @staticmethod
-    def get_bbox(ifc_file, spatial_elements, element_bounds=None):
+    def get_bbox(ifc_file, spatial_elements, element_bounds=None, rotation=None):
         """Calculate bounding box for spatial elements
 
         Encloses the geometry of all elements located in the spatial elements.
@@ -218,15 +278,22 @@ class GeometryUtils:
         Args:
             ifc_file: The IFC file
             spatial_elements: List of spatial elements
-            element_bounds: Optional precomputed result of get_element_bounds(),
-                to avoid tessellating the same elements more than once
+            element_bounds: Optional precomputed element bounds aligned to
+                rotation, from get_element_bounds() or
+                get_oriented_element_bounds(), to avoid tessellating the same
+                elements more than once
+            rotation: Optional rotation from get_rotation() to align the box
+                to, instead of the world axes
 
         Returns:
-            Tuple of (min_point, mid_point, max_point)
+            Tuple of (min_point, mid_point, max_point), in coordinates along
+            the rotated axes if rotation is given
         """
         elements = GeometryUtils.get_location_elements(ifc_file, spatial_elements)
         if element_bounds is None:
-            element_bounds = GeometryUtils.get_element_bounds(ifc_file, elements)
+            element_bounds = GeometryUtils.get_oriented_element_bounds(
+                ifc_file, elements, {e.id(): rotation for e in elements}
+            )[0 if rotation is None else 1]
 
         mins = []
         maxs = []
@@ -248,6 +315,8 @@ class GeometryUtils:
             # single world axis (e.g. on x=0 at the grid origin) are kept.
             if not origin.any():
                 continue
+            if rotation is not None:
+                origin = origin @ rotation
 
             mins.append(origin)
             maxs.append(origin)
@@ -423,10 +492,33 @@ class DrawingGenerator:
         self.buildings = natsorted(
             ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name or ""
         )
-        # Tessellate every element once, reused for all bounding boxes
-        self.element_bounds = GeometryUtils.get_element_bounds(
-            ifc_file, GeometryUtils.get_location_elements(ifc_file, self.buildings)
+        # A building's orientation comes from its placement alone
+        self.rotations = {
+            building.id(): GeometryUtils.get_rotation(building)
+            for building in self.buildings
+        }
+        self.true_north = ifcopenshell.util.geolocation.get_true_north(ifc_file)
+
+        # Tessellate every element once, reused for all bounding boxes.
+        # Elements of rotated buildings also get boxes aligned to their
+        # building.
+        elements = set()
+        element_rotations = {}
+        for building in self.buildings:
+            building_elements = GeometryUtils.get_location_elements(
+                ifc_file, [building]
+            )
+            elements.update(building_elements)
+            rotation = self.rotations[building.id()]
+            if rotation is not None:
+                element_rotations.update((e.id(), rotation) for e in building_elements)
+        self.element_bounds, self.oriented_bounds = (
+            GeometryUtils.get_oriented_element_bounds(
+                ifc_file, elements, element_rotations
+            )
         )
+        # The site bbox stays aligned to the world axes, so location plans
+        # are north up
         self.bbox_all = GeometryUtils.get_bbox(
             ifc_file, self.buildings, self.element_bounds
         )
@@ -703,8 +795,12 @@ class DrawingGenerator:
         scale,
         sheet_info,
         drawing_id,
+        rotation=None,
     ):
         """Create a plan drawing for a storey
+
+        The plan is square to its building: the camera's x axis, which runs
+        along the sheet, is the building's x axis.
 
         Args:
             storey: The building storey
@@ -712,6 +808,9 @@ class DrawingGenerator:
             scale: Drawing scale
             sheet_info: Sheet document information
             drawing_id: Drawing ID
+            rotation: Optional building rotation from
+                GeometryUtils.get_rotation(), along whose axes building_bbox
+                is given
 
         Returns:
             Tuple of (new_drawing_id, annotation, group)
@@ -726,13 +825,12 @@ class DrawingGenerator:
         )
         elevation = local_placement[2][3]
 
-        # Create camera position (1.8 meters above floor in project units)
-        point = self.ifc_file.createIfcCartesianPoint(
-            [float(bbox_mid[0]), float(bbox_mid[1]), float(elevation + 1.8 / self.unit_scale)]
-        )
-
-        local_placement = self.ifc_file.createIfcLocalPlacement(
-            None, self.ifc_file.createIfcAxis2Placement3D(point, None, None)
+        # Camera 1.8 meters above floor in project units, looking down
+        local_placement = self.create_camera_placement(
+            [bbox_mid[0], bbox_mid[1], elevation + 1.8 / self.unit_scale],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+            rotation,
         )
 
         # Create annotation (camera volume depth 10 meters in project units)
@@ -780,7 +878,7 @@ class DrawingGenerator:
             if part.is_a("IfcSpace")
         ]
 
-    def create_space_labels(self, storey, elevation, group, centroids):
+    def create_space_labels(self, storey, elevation, group, centroids, rotation=None):
         """Create labels for spaces in a storey
 
         Args:
@@ -788,7 +886,11 @@ class DrawingGenerator:
             elevation: Elevation value
             group: Drawing group
             centroids: Result of GeometryUtils.get_centroids() for the spaces
+            rotation: Optional building rotation from
+                GeometryUtils.get_rotation(), which the text follows so that
+                it runs along the plan
         """
+        ref_direction = [1.0, 0.0, 0.0] if rotation is None else rotation[:, 0]
         for space in self.get_storey_spaces(storey):
             # Spaces without body geometry have no centroid to label
             centroid = centroids.get(space.id())
@@ -803,7 +905,7 @@ class DrawingGenerator:
                         [centroid[0], centroid[1], float(elevation) + 0.1 / self.unit_scale]
                     ),
                     self.ifc_file.createIfcDirection([0.0, 0.0, 1.0]),
-                    self.ifc_file.createIfcDirection([1.0, 0.0, 0.0]),
+                    self.ifc_file.createIfcDirection([float(v) for v in ref_direction]),
                 ),
             )
 
@@ -845,71 +947,109 @@ class DrawingGenerator:
                 },
             )
 
+    def create_camera_placement(self, point, axis, ref_direction, rotation=None):
+        """Create an absolute placement for a drawing camera
+
+        Args:
+            point: Camera position
+            axis: Camera z axis, pointing back towards the viewer
+            ref_direction: Camera x axis, which runs along the drawing
+            rotation: Optional rotation from GeometryUtils.get_rotation(),
+                along whose axes point, axis and ref_direction are given
+
+        Returns:
+            IfcLocalPlacement
+        """
+        vectors = [np.array(v, dtype=float) for v in (point, axis, ref_direction)]
+        if rotation is not None:
+            vectors = [rotation @ v for v in vectors]
+        point, axis, ref_direction = ([float(c) for c in v] for v in vectors)
+        return self.ifc_file.createIfcLocalPlacement(
+            None,
+            self.ifc_file.createIfcAxis2Placement3D(
+                self.ifc_file.createIfcCartesianPoint(point),
+                self.ifc_file.createIfcDirection(axis),
+                self.ifc_file.createIfcDirection(ref_direction),
+            ),
+        )
+
+    def get_compass_name(self, direction):
+        """Name a horizontal direction by the nearest of eight compass points
+
+        Bearings are measured clockwise from true north. A bearing exactly
+        between two compass points goes to the cardinal one.
+
+        Args:
+            direction: Direction in world coordinates
+
+        Returns:
+            Compass point name from COMPASS_POINTS, such as "NORTH-EAST"
+        """
+        # World +y is project north, and true north is self.true_north
+        # degrees anticlockwise from it
+        angle = np.degrees(np.arctan2(direction[1], direction[0]))
+        sector = ((90.0 + self.true_north - angle) % 360.0) / 45.0
+        lower = np.floor(sector)
+        if abs(sector - lower - 0.5) < 1e-6:
+            # Cardinal points have even indices
+            index = lower if lower % 2 == 0 else lower + 1
+        else:
+            index = np.floor(sector + 0.5)
+        return COMPASS_POINTS[int(index) % 8]
+
     def create_elevation_drawing(
         self,
         building,
         building_bbox,
-        direction,
+        normal,
         sheet_info,
         drawing_id,
+        rotation=None,
     ):
-        """Create an elevation drawing
+        """Create an elevation drawing of one face of a building's bbox
+
+        The camera looks square on to the face, and the drawing is named by
+        the compass point the face looks towards.
 
         Args:
             building: The building element
             building_bbox: Building bounding box tuple
-            direction: Elevation direction ("NORTH", "SOUTH", "EAST", "WEST")
+            normal: Outward normal of the face along the bbox axes, one of
+                [0, 1, 0], [0, -1, 0], [-1, 0, 0] or [1, 0, 0]
             sheet_info: Sheet document information
             drawing_id: Drawing ID
+            rotation: Optional building rotation from
+                GeometryUtils.get_rotation(), along whose axes building_bbox
+                and normal are given
 
         Returns:
             new_drawing_id
         """
-        bbox_min, bbox_mid, bbox_max = building_bbox
-        dim_x = bbox_max[0] - bbox_min[0] + 2.0 / self.unit_scale
-        dim_y = bbox_max[1] - bbox_min[1] + 2.0 / self.unit_scale
-        dim_z = bbox_max[2] - bbox_min[2] + 2.0 / self.unit_scale
+        bbox_min, bbox_mid, bbox_max = (np.array(v, dtype=float) for v in building_bbox)
+        normal = np.array(normal, dtype=float)
+        # Bbox dimensions padded by 2m in project units
+        dims = bbox_max - bbox_min + 2.0 / self.unit_scale
 
-        # Set up direction-specific parameters (0.5m offset, 1m depth in project units)
+        # Camera 0.5m out from the face in project units, looking back at it,
+        # with the drawing running left to right as seen from outside
         offset = 0.5 / self.unit_scale
+        point = bbox_mid + normal * ((bbox_max - bbox_min) / 2 + offset)
+        ref_direction = np.cross([0.0, 0.0, 1.0], normal)
+        local_placement = self.create_camera_placement(
+            point, normal, ref_direction, rotation
+        )
+
+        # The camera reaches 1m (in project units) short of the far side of
+        # the padded bbox
         depth = 1.0 / self.unit_scale
+        camera_dims = (
+            float(np.abs(ref_direction) @ dims),
+            float(dims[2]),
+            float(np.abs(normal) @ dims - depth),
+        )
 
-        if direction == "NORTH":
-            point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_max[1]) + offset, float(bbox_mid[2])]
-            )
-            axis_dir = self.ifc_file.createIfcDirection([0.0, 1.0, 0.0])
-            ref_dir = self.ifc_file.createIfcDirection([-1.0, 0.0, 0.0])
-            camera_dims = (dim_x, dim_z, dim_y - depth)
-
-        elif direction == "SOUTH":
-            point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_mid[0]), float(bbox_min[1]) - offset, float(bbox_mid[2])]
-            )
-            axis_dir = self.ifc_file.createIfcDirection([0.0, -1.0, 0.0])
-            ref_dir = self.ifc_file.createIfcDirection([1.0, 0.0, 0.0])
-            camera_dims = (dim_x, dim_z, dim_y - depth)
-
-        elif direction == "WEST":
-            point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_min[0]) - offset, float(bbox_mid[1]), float(bbox_mid[2])]
-            )
-            axis_dir = self.ifc_file.createIfcDirection([-1.0, 0.0, 0.0])
-            ref_dir = self.ifc_file.createIfcDirection([0.0, -1.0, 0.0])
-            camera_dims = (dim_y, dim_z, dim_x - depth)
-
-        elif direction == "EAST":
-            point = self.ifc_file.createIfcCartesianPoint(
-                [float(bbox_max[0]) + offset, float(bbox_mid[1]), float(bbox_mid[2])]
-            )
-            axis_dir = self.ifc_file.createIfcDirection([1.0, 0.0, 0.0])
-            ref_dir = self.ifc_file.createIfcDirection([0.0, 1.0, 0.0])
-            camera_dims = (dim_y, dim_z, dim_x - depth)
-
-        # Create placement
-        local_placement = self.ifc_file.createIfcLocalPlacement(
-            None,
-            self.ifc_file.createIfcAxis2Placement3D(point, axis_dir, ref_dir),
+        direction = self.get_compass_name(
+            normal if rotation is None else rotation @ normal
         )
 
         # Create annotation
@@ -1170,10 +1310,14 @@ class DrawingGenerator:
             identification = f"A{str(sheet_id).zfill(3)}"
             sheet_info = self.create_sheet_info(identification, building.Name)
 
-            # FIXME should use local building orientation for bbox and cameras
-            # Calculate building bounding box and dimensions
+            # Calculate the building bounding box, aligned to the building's
+            # own axes
+            rotation = self.rotations[building.id()]
             building_bbox = GeometryUtils.get_bbox(
-                self.ifc_file, [building], self.element_bounds
+                self.ifc_file,
+                [building],
+                self.element_bounds if rotation is None else self.oriented_bounds,
+                rotation,
             )
 
             drawing_id = 0
@@ -1186,19 +1330,29 @@ class DrawingGenerator:
                     self.scale,
                     sheet_info,
                     drawing_id,
+                    rotation,
                 )
 
                 # Add space labels
-                self.create_space_labels(storey, elevation, group, centroids)
+                self.create_space_labels(
+                    storey, elevation, group, centroids, rotation
+                )
 
-            # Create elevation drawings
-            for direction in ["NORTH", "SOUTH", "WEST", "EAST"]:
+            # Create elevation drawings of the bbox faces along the building's
+            # +y, -y, -x and +x axes
+            for normal in (
+                [0.0, 1.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [-1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ):
                 drawing_id = self.create_elevation_drawing(
                     building,
                     building_bbox,
-                    direction,
+                    normal,
                     sheet_info,
                     drawing_id,
+                    rotation,
                 )
 
             # Create location plan if there's more than one building

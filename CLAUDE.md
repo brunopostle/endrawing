@@ -36,7 +36,7 @@ The codebase is organized into functional classes in `endrawing.py`:
   - Calculates overall site bounding box from all buildings using natsorted ordering
   - Creates one sheet per building with identification like "A001", "A002", etc.
   - Generates plan drawings for each building storey (camera positioned at elevation + 1.8m)
-  - Creates four elevation drawings (NORTH, SOUTH, EAST, WEST) with direction-specific camera placement
+  - Creates four elevation drawings, one per face of the building's bbox, named by the nearest compass point to true north (NORTH, NORTH-EAST, ... NORTH-WEST)
   - Optionally creates location plans at 10x scale when multiple buildings exist
   - Places space labels at geometric centroids using text annotations
 
@@ -77,13 +77,14 @@ This makes endrawing **idempotent** - running it multiple times updates the GA d
 
 **Drawing Scale**: Default scale is 1:100 on A2 sheets, or 1/96 (1/8"=1'-0") in imperial projects, matching Bonsai's add_drawing. Imperial HumanScale uses Bonsai's architectural and engineering notation (`IMPERIAL_HUMAN_SCALES`), falling back to `1:N`. The location plan is 10x the drawing scale (1:1000, or 1"=80'). Scale and titleblock are configurable via DrawingGenerator constructor parameters. Drawing positions on sheets are handled automatically by Bonsai BIM's heuristic placement when sheets are generated.
 
+**Building Orientation**: A building's orientation comes only from the z rotation of its absolute placement (`GeometryUtils.get_rotation()`, which includes a rotated site above it). Geometry is never used to infer orientation: walls rotated inside an unrotated building placement are a modelling error, and such buildings stay world-aligned. For rotated buildings, `get_oriented_element_bounds()` rotates each element's vertices into the building's axes before taking min/max, in the same tessellation pass as the world bounds, and `get_bbox(..., rotation=)` returns the bbox in coordinates along those axes. Camera code works in those coordinates, and `create_camera_placement()` rotates points and directions back to world coordinates. Unrotated buildings (rotation None) behave exactly as world-aligned ones always did.
+
 **Camera Placement**: Drawing cameras are positioned using IFC placement matrices:
-- Plans: Positioned above storey elevations at `elevation + 1.8m` looking down
-- Elevations: Offset 0.5m from bounding box faces with direction-specific axis/reference directions
-  - NORTH: Views from north looking south (y+, ref direction x-)
-  - SOUTH: Views from south looking north (y-, ref direction x+)
-  - EAST: Views from east looking west (x+, ref direction y+)
-  - WEST: Views from west looking east (x-, ref direction y-)
+- Plans: Positioned above storey elevations at `elevation + 1.8m` looking down, with RefDirection along the building's x axis, so plans of rotated buildings are square to the sheet (north isn't up)
+- Elevations: Offset 0.5m from each face of the building's bbox, looking square on to it: Axis is the face's outward normal and RefDirection is z × normal. Faces along the building's +y, -y, -x and +x axes are drawn in that order
+- Elevation names: the compass bearing of the face's outward normal, measured clockwise from true north (the Model context's TrueNorth, via `ifcopenshell.util.geolocation.get_true_north()`), snapped to the nearest of eight points in `COMPASS_POINTS` (N, NE, E, SE, S, SW, W, NW). The four faces are 90 degrees apart so names never collide; a bearing exactly between two points goes to the cardinal one
+- Location plans: world-aligned and north up, whatever the buildings' rotations
+- Space labels: text RefDirection along the building's x axis, so it reads along the plan
 
 **IFC API Usage**: The tool uses ifcopenshell.api for contexts, documents, groups, psets and products (api.context, api.document, api.group, api.pset, api.root, api.drawing), which handles schema differences, so IFC2X3 and IFC4 both work. Direct IFC entity creation is only used for lower-level geometry whose attribute layout is the same in both schemas (createIfcCartesianPoint, createIfcAxis2Placement3D, createIfcBlock, createIfcTextLiteralWithExtent). IFC2X3 models need an owner history user and application (see tests/test_documents.py).
 
@@ -129,7 +130,7 @@ Runtime modes:
 
 ## Known Limitations
 
-- **Building orientation**: Bounding box calculation doesn't consider building's local coordinate system rotation (see FIXME comment at endrawing.py:833)
+- **North arrows on rotated plans**: Bonsai's titleblocks rotate their north arrows by the project's true north only, per sheet, so on sheets of rotated buildings (whose plans are square to the sheet) the titleblock arrow is off by the building's rotation. Bonsai's symbols.svg has no north arrow symbol to place in the drawing instead (tracked in beads)
 - **Default settings**: A2 and 1:100 (1/8"=1'-0" imperial) scale are defaults (configurable via `--scale` and `--titleblock` arguments)
 
 
