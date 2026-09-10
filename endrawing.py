@@ -836,86 +836,128 @@ class DrawingGenerator:
 
         return drawing_id
 
+    def get_references(self, information):
+        """Get the document references of an IfcDocumentInformation
+
+        Args:
+            information: The IfcDocumentInformation
+
+        Returns:
+            List of IfcDocumentReference
+        """
+        if self.ifc_file.schema == "IFC2X3":
+            return list(information.DocumentReferences or [])
+        return list(information.HasDocumentReferences)
+
+    def get_information(self, reference):
+        """Get the IfcDocumentInformation that a reference belongs to
+
+        Args:
+            reference: The IfcDocumentReference
+
+        Returns:
+            IfcDocumentInformation, or None
+        """
+        if self.ifc_file.schema == "IFC2X3":
+            return next(iter(reference.ReferenceToDocument), None)
+        return reference.ReferencedDocument
+
+    def get_reference_description(self, reference):
+        """Get the role of a sheet reference, such as "DRAWING" or "LAYOUT"
+
+        IFC2X3 references have no Description, so Bonsai uses Name instead.
+
+        Args:
+            reference: The IfcDocumentReference
+
+        Returns:
+            Description string, or None
+        """
+        if self.ifc_file.schema == "IFC2X3":
+            return reference.Name
+        return reference.Description
+
+    def is_generated_sheet(self, sheet, drawing_locations):
+        """Check whether a sheet was created by endrawing
+
+        A generated sheet is a General Arrangement sheet whose drawings are
+        all endrawing drawings. A sheet with any other drawing on it, or with
+        none, belongs to the user, whatever its Purpose.
+
+        Args:
+            sheet: IfcDocumentInformation
+            drawing_locations: Set of SVG locations of endrawing drawings
+
+        Returns:
+            True if endrawing created the sheet
+        """
+        if sheet.Scope != "SHEET" or sheet.Purpose != "General Arrangement":
+            return False
+        locations = [
+            reference.Location
+            for reference in self.get_references(sheet)
+            if self.get_reference_description(reference) == "DRAWING"
+        ]
+        return bool(locations) and all(l in drawing_locations for l in locations)
+
     def cleanup_existing_drawings(self):
-        """Remove all endrawing-generated drawings and sheets"""
-        # Find all annotations with our marker (in either EPset_Drawing or EPset_Annotation)
-        to_remove = []
+        """Remove all endrawing-generated drawings and sheets
+
+        Everything removed is traced from annotations marked GeneratedBy =
+        "endrawing": the annotations themselves, the documents and groups of
+        the drawings among them, and the sheets holding only those drawings.
+        """
+        drawings = []
+        labels = []
         for annotation in self.ifc_file.by_type("IfcAnnotation"):
             psets = ifcopenshell.util.element.get_psets(annotation)
-            if (psets.get("EPset_Drawing", {}).get("GeneratedBy") == "endrawing" or
-                psets.get("EPset_Annotation", {}).get("GeneratedBy") == "endrawing"):
-                to_remove.append(annotation)
+            if psets.get("EPset_Drawing", {}).get("GeneratedBy") == "endrawing":
+                drawings.append(annotation)
+            elif psets.get("EPset_Annotation", {}).get("GeneratedBy") == "endrawing":
+                labels.append(annotation)
 
-        # Remove annotations using proper API (handles relationships automatically)
-        for annotation in to_remove:
-            try:
-                api.root.remove_product(self.ifc_file, product=annotation)
-            except (RuntimeError, AttributeError) as e:
-                # Element may already be removed or invalid
-                pass
+        documents = set()
+        groups = set()
+        drawing_locations = set()
+        for drawing in drawings:
+            for rel in drawing.HasAssociations:
+                if rel.is_a("IfcRelAssociatesDocument") and rel.RelatingDocument.is_a(
+                    "IfcDocumentReference"
+                ):
+                    drawing_locations.add(rel.RelatingDocument.Location)
+                    information = self.get_information(rel.RelatingDocument)
+                    if information:
+                        documents.add(information)
+            for rel in drawing.HasAssignments:
+                if (
+                    rel.is_a("IfcRelAssignsToGroup")
+                    and rel.RelatingGroup.ObjectType == "DRAWING"
+                ):
+                    groups.add(rel.RelatingGroup)
 
-        # Clean up orphaned IfcRelAssociatesDocument relationships with empty RelatedObjects
-        for rel in list(self.ifc_file.by_type("IfcRelAssociatesDocument")):
-            if not rel.RelatedObjects or len(rel.RelatedObjects) == 0:
-                try:
-                    self.ifc_file.remove(rel)
-                except (RuntimeError, AttributeError):
-                    pass
-            elif rel.RelatingDocument is None:
-                # Also remove relationships with null documents
-                try:
-                    self.ifc_file.remove(rel)
-                except (RuntimeError, AttributeError):
-                    pass
+        # Identify sheets while their drawings still exist
+        sheets = [
+            sheet
+            for sheet in self.ifc_file.by_type("IfcDocumentInformation")
+            if self.is_generated_sheet(sheet, drawing_locations)
+        ]
 
-        # Find and remove orphaned groups (groups with no related objects)
-        # After removing products, some groups may be empty
-        for group in list(self.ifc_file.by_type("IfcGroup")):
-            if group.ObjectType == "DRAWING":
-                # Check if group has any related objects
-                has_objects = False
-                for rel in self.ifc_file.by_type("IfcRelAssignsToGroup"):
-                    if rel.RelatingGroup == group and len(rel.RelatedObjects or []) > 0:
-                        has_objects = True
-                        break
-                if not has_objects:
-                    try:
-                        api.group.remove_group(self.ifc_file, group=group)
-                    except (RuntimeError, AttributeError, TypeError):
-                        pass
+        # Removing a drawing's document also removes its reference and the
+        # association with the drawing
+        for information in documents:
+            api.document.remove_information(self.ifc_file, information=information)
 
-        # Find and remove orphaned sheet documents
-        for doc_info in list(self.ifc_file.by_type("IfcDocumentInformation")):
-            if hasattr(doc_info, "Purpose") and doc_info.Purpose == "General Arrangement":
-                # Check if any drawings still reference this sheet
-                has_drawings = False
-                for rel in self.ifc_file.by_type("IfcRelAssociatesDocument"):
-                    # Check if relationship references a drawing that still exists
-                    if rel.RelatedObjects and len(rel.RelatedObjects) > 0:
-                        doc = rel.RelatingDocument
-                        if doc and doc.is_a("IfcDocumentReference") and hasattr(doc, "ReferencedDocument"):
-                            if doc.ReferencedDocument == doc_info:
-                                has_drawings = True
-                                break
+        for annotation in drawings + labels:
+            api.root.remove_product(self.ifc_file, product=annotation)
 
-                if not has_drawings:
-                    # Remove document references first (using proper API)
-                    refs_to_remove = []
-                    for ref in self.ifc_file.by_type("IfcDocumentReference"):
-                        if hasattr(ref, "ReferencedDocument") and ref.ReferencedDocument == doc_info:
-                            refs_to_remove.append(ref)
+        # A drawing group can also hold annotations the user added to the
+        # drawing, so it's only removed once it's empty
+        for group in groups:
+            if not any(rel.RelatedObjects for rel in group.IsGroupedBy):
+                api.group.remove_group(self.ifc_file, group=group)
 
-                    for ref in refs_to_remove:
-                        try:
-                            api.document.remove_reference(self.ifc_file, reference=ref)
-                        except (RuntimeError, AttributeError, TypeError):
-                            pass
-
-                    # Remove the document info (using proper API)
-                    try:
-                        api.document.remove_information(self.ifc_file, information=doc_info)
-                    except (RuntimeError, AttributeError, TypeError):
-                        pass
+        for sheet in sheets:
+            api.document.remove_information(self.ifc_file, information=sheet)
 
     def generate_drawings(self):
         """Generate all drawings for buildings"""

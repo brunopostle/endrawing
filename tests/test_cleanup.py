@@ -95,6 +95,75 @@ def test_cleanup_removes_all_endrawing_entities(simple_building_ifc):
     assert len(remaining_sheets) == 0, f"Cleanup left {len(remaining_sheets)} sheets"
 
 
+def _add_user_sheet(ifc, drawing_locations, purpose="General Arrangement"):
+    """Add a sheet made by the user, holding drawings at the given locations"""
+    sheet = ifcopenshell.api.document.add_information(ifc)
+    ifcopenshell.api.document.edit_information(
+        ifc,
+        information=sheet,
+        attributes={"Identification": "GA-101", "Name": "User GA", "Purpose": purpose, "Scope": "SHEET"},
+    )
+    for i, location in enumerate(drawing_locations):
+        reference = ifcopenshell.api.document.add_reference(ifc, information=sheet)
+        ifcopenshell.api.document.edit_reference(
+            ifc,
+            reference=reference,
+            attributes={"Location": location, "Identification": str(i + 1), "Description": "DRAWING"},
+        )
+    return sheet
+
+
+def _sheets(ifc, identification):
+    return [d for d in ifc.by_type("IfcDocumentInformation") if d.Identification == identification]
+
+
+def test_cleanup_preserves_user_general_arrangement_sheet(simple_building_ifc):
+    """A user's sheet with the same Purpose, holding the user's drawing, survives (endrawing-6yk)"""
+    _add_user_sheet(simple_building_ifc, ["drawings/USER PLAN.svg"])
+
+    for _ in range(2):
+        DrawingGenerator(simple_building_ifc).generate_drawings()
+
+    sheets = _sheets(simple_building_ifc, "GA-101")
+    assert len(sheets) == 1, "User sheet was removed"
+    assert [r.Location for r in sheets[0].HasDocumentReferences] == ["drawings/USER PLAN.svg"]
+
+
+def test_cleanup_preserves_empty_user_sheet(simple_building_ifc):
+    """A user's General Arrangement sheet with no drawings yet survives"""
+    _add_user_sheet(simple_building_ifc, [])
+
+    for _ in range(2):
+        DrawingGenerator(simple_building_ifc).generate_drawings()
+
+    assert len(_sheets(simple_building_ifc, "GA-101")) == 1
+
+
+def test_cleanup_preserves_sheet_mixing_user_and_generated_drawings(simple_building_ifc):
+    """A sheet holding a generated drawing and a user drawing belongs to the user"""
+    DrawingGenerator(simple_building_ifc).generate_drawings()
+    _add_user_sheet(simple_building_ifc, ["drawings/Ground Floor.svg", "drawings/USER PLAN.svg"])
+
+    DrawingGenerator(simple_building_ifc).generate_drawings()
+
+    sheets = _sheets(simple_building_ifc, "GA-101")
+    assert len(sheets) == 1
+    assert len(sheets[0].HasDocumentReferences) == 2
+    assert len(_sheets(simple_building_ifc, "A001")) == 1
+
+
+def test_repeated_runs_leave_no_orphans(simple_building_ifc):
+    """Drawing documents and references are removed with their drawings"""
+    DrawingGenerator(simple_building_ifc).generate_drawings()
+    count = len(list(simple_building_ifc))
+    documents = len(simple_building_ifc.by_type("IfcDocumentInformation"))
+
+    DrawingGenerator(simple_building_ifc).generate_drawings()
+
+    assert len(simple_building_ifc.by_type("IfcDocumentInformation")) == documents
+    assert len(list(simple_building_ifc)) == count
+
+
 def test_file_writes_successfully_after_cleanup(simple_building_ifc, tmp_path):
     """Test that IFC file can be written after cleanup without corruption"""
     # Generate drawings twice (triggers cleanup)
