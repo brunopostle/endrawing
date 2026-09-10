@@ -56,9 +56,7 @@ class ContextManager:
         plan_context = ifcopenshell.util.representation.get_context(ifc_file, "Plan")
 
         if not plan_context:
-            plan_context = ifc_file.createIfcGeometricRepresentationContext(
-                None, "Plan", 2, None, model_context.WorldCoordinateSystem, None
-            )
+            plan_context = api.context.add_context(ifc_file, context_type="Plan")
 
         annotation_context = ifcopenshell.util.representation.get_context(
             ifc_file, "Plan", subcontext="Annotation"
@@ -478,56 +476,124 @@ class DrawingGenerator:
 
         api.group.assign_group(self.ifc_file, group=group, products=[annotation])
 
+        # Bonsai collects every drawing group in one parent group
+        api.group.assign_group(
+            self.ifc_file, group=self.drawings_group, products=[group]
+        )
+
         return group
 
+    def ensure_drawings_parent_document(self):
+        """Get or create the document Bonsai nests drawing documents under
+
+        Shared with drawings made in Bonsai, so cleanup never removes it.
+
+        Returns:
+            IfcDocumentInformation named DRAWINGS
+        """
+        for information in self.ifc_file.by_type("IfcDocumentInformation"):
+            if information.Name == "DRAWINGS" and information.Scope == "DRAWINGS":
+                return information
+        information = api.document.add_information(self.ifc_file)
+        self.edit_information(
+            information, Identification="DRAWINGS", Name="DRAWINGS", Scope="DRAWINGS"
+        )
+        return information
+
+    def ensure_drawings_parent_group(self):
+        """Get or create the group Bonsai collects drawing groups in
+
+        Shared with drawings made in Bonsai, so cleanup never removes it.
+
+        Returns:
+            IfcGroup named DRAWINGS
+        """
+        for group in self.ifc_file.by_type("IfcGroup"):
+            if group.Name == "DRAWINGS" and group.ObjectType == "DRAWINGS":
+                return group
+        group = api.group.add_group(self.ifc_file)
+        api.group.edit_group(
+            self.ifc_file,
+            group=group,
+            attributes={"Name": "DRAWINGS", "ObjectType": "DRAWINGS"},
+        )
+        return group
+
+    def edit_information(self, information, **attributes):
+        """Set IfcDocumentInformation attributes, named as in IFC4
+
+        IFC2X3 calls Identification DocumentId.
+
+        Args:
+            information: The IfcDocumentInformation
+            **attributes: Attribute values
+        """
+        if self.ifc_file.schema == "IFC2X3" and "Identification" in attributes:
+            attributes["DocumentId"] = attributes.pop("Identification")
+        api.document.edit_information(
+            self.ifc_file, information=information, attributes=attributes
+        )
+
+    def add_reference(self, information, **attributes):
+        """Add an IfcDocumentReference with attributes named as in IFC4
+
+        IFC2X3 calls Identification ItemReference, and has no Description, so
+        Bonsai uses Name instead.
+
+        Args:
+            information: The IfcDocumentInformation to add the reference to
+            **attributes: Attribute values
+
+        Returns:
+            IfcDocumentReference
+        """
+        reference = api.document.add_reference(self.ifc_file, information=information)
+        if self.ifc_file.schema == "IFC2X3":
+            if "Identification" in attributes:
+                attributes["ItemReference"] = attributes.pop("Identification")
+            if "Description" in attributes:
+                attributes["Name"] = attributes.pop("Description")
+        api.document.edit_reference(
+            self.ifc_file, reference=reference, attributes=attributes
+        )
+        return reference
+
     def attach_sheet(self, annotation, sheet_info, drawing_id):
-        """Attach a drawing to a sheet
+        """Create a drawing's document and place the drawing on a sheet
+
+        Follows Bonsai's add_drawing and AddDrawingToSheet.
 
         Args:
             annotation: The annotation element
             sheet_info: Sheet document information
             drawing_id: Drawing ID
         """
-        info = self.ifc_file.createIfcDocumentInformation(
-            annotation.Name,
-            annotation.Name,
-            None,
-            None,
-            None,
-            None,
-            "DRAWING",
+        information = api.document.add_information(
+            self.ifc_file, parent=self.drawings_document
+        )
+        self.edit_information(
+            information, Identification="X", Name=annotation.Name, Scope="DRAWING"
         )
 
-        # Associate this drawing-annotation with the Project
-        rel = api.root.create_entity(
-            self.ifc_file, ifc_class="IfcRelAssociatesDocument"
-        )
-        rel.RelatedObjects = self.ifc_file.by_type("IfcProject")
-        rel.RelatingDocument = info
-
-        # Generate path for drawing SVG
-        path_drawing = f"drawings/{annotation.Name}.svg"
-
-        # Associate SVG with this drawing-annotation
-        rel = api.root.create_entity(
-            self.ifc_file, ifc_class="IfcRelAssociatesDocument"
-        )
-        rel.RelatedObjects = [annotation]
-        rel.RelatingDocument = self.ifc_file.createIfcDocumentReference(
-            path_drawing, None, None, None, info
+        # Associate the drawing SVG with the drawing annotation
+        location = f"drawings/{annotation.Name}.svg"
+        reference = self.add_reference(information, Location=location)
+        api.document.assign_document(
+            self.ifc_file, products=[annotation], document=reference
         )
 
-        # Place SVG in sheet
-        self.ifc_file.createIfcDocumentReference(
-            path_drawing,
-            str(drawing_id),
-            None,
-            "DRAWING",
+        # Place the drawing SVG on the sheet
+        self.add_reference(
             sheet_info,
+            Location=location,
+            Identification=str(drawing_id),
+            Description="DRAWING",
         )
 
     def create_sheet_info(self, identification, building_name):
         """Create sheet document information
+
+        Follows Bonsai's add_sheet.
 
         Args:
             identification: Sheet identifier
@@ -536,37 +602,26 @@ class DrawingGenerator:
         Returns:
             IfcDocumentInformation
         """
-        sheet_info = self.ifc_file.createIfcDocumentInformation(
-            identification,
-            building_name,
-            "General Arrangement",
-            None,
-            "General Arrangement",  # Purpose
-            None,
-            "SHEET",
-        )
-
-        rel = api.root.create_entity(
-            self.ifc_file, ifc_class="IfcRelAssociatesDocument"
-        )
-        rel.RelatedObjects = self.ifc_file.by_type("IfcProject")
-        rel.RelatingDocument = sheet_info
-
-        # Create document references
-        self.ifc_file.createIfcDocumentReference(
-            f"layouts/{identification} - {building_name}.svg",
-            None,
-            None,
-            "LAYOUT",
+        # Without a parent, the sheet is associated with the IfcProject
+        sheet_info = api.document.add_information(self.ifc_file)
+        self.edit_information(
             sheet_info,
+            Identification=identification,
+            Name=building_name,
+            Description="General Arrangement",
+            Purpose="General Arrangement",
+            Scope="SHEET",
         )
 
-        self.ifc_file.createIfcDocumentReference(
-            f"layouts/titleblocks/{self.titleblock}.svg",
-            None,
-            None,
-            "TITLEBLOCK",
+        self.add_reference(
             sheet_info,
+            Location=f"layouts/{identification} - {building_name}.svg",
+            Description="LAYOUT",
+        )
+        self.add_reference(
+            sheet_info,
+            Location=f"layouts/titleblocks/{self.titleblock}.svg",
+            Description="TITLEBLOCK",
         )
 
         return sheet_info
@@ -1019,6 +1074,8 @@ class DrawingGenerator:
     def generate_drawings(self):
         """Generate all drawings for buildings"""
         self.cleanup_existing_drawings()
+        self.drawings_document = self.ensure_drawings_parent_document()
+        self.drawings_group = self.ensure_drawings_parent_group()
 
         storeys = {building: self.get_storeys(building) for building in self.buildings}
 

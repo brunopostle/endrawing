@@ -44,8 +44,11 @@ The codebase is organized into functional classes in `endrawing.py`:
 All handled within DrawingGenerator methods:
 - `create_drawing_pset()`: Creates EPset_Drawing property sets with scale (1:100 default), view type, and asset paths for CSS/SVG resources
 - `set_elevation_properties()`: Configures ELEVATION_VIEW and Include filter for building-specific elements
-- `attach_sheet()`: Associates drawings with sheets via IfcDocumentInformation and IfcDocumentReference hierarchy
-- `create_drawing_group()`: Creates DRAWING groups and assigns annotation entities
+- `attach_sheet()`: Creates the drawing's IfcDocumentInformation (Scope DRAWING) nested under Bonsai's DRAWINGS parent document, a reference to the drawing SVG associated with the annotation, and a DRAWING reference placing it on the sheet, following Bonsai's add_drawing and AddDrawingToSheet
+- `create_sheet_info()`: Creates the sheet (Scope SHEET, Purpose "General Arrangement") with LAYOUT and TITLEBLOCK references, following Bonsai's add_sheet
+- `create_drawing_group()`: Creates DRAWING groups, assigns annotation entities, and assigns the group to Bonsai's DRAWINGS parent group
+- `ensure_drawings_parent_document()` / `ensure_drawings_parent_group()`: Find or create the DRAWINGS parents the same way Bonsai does. They're shared with Bonsai-made drawings and never removed
+- `edit_information()` / `add_reference()`: Take IFC4 attribute names and convert them for IFC2X3 (DocumentId, ItemReference, and Name for Description), like Bonsai's generate_reference_attributes
 
 ### Drawing Identification and Update Strategy
 
@@ -57,11 +60,14 @@ All endrawing-created content is marked with a custom property in EPset_Drawing:
 
 **Update Behavior** (automatic):
 When endrawing runs, it automatically:
-1. Finds all existing IfcAnnotation entities where EPset_Drawing contains `GeneratedBy = "endrawing"`
-2. Removes those annotations using `api.root.remove_product()` (handles relationships automatically)
-3. Finds and removes orphaned IfcGroup entities with ObjectType = "DRAWING" that have no related objects
-4. Finds and removes orphaned IfcDocumentInformation sheets with Purpose = "General Arrangement" that have no drawing references
-5. Regenerates fresh GA drawings and sheets for all current buildings
+1. Finds all existing IfcAnnotation entities where EPset_Drawing (drawings) or EPset_Annotation (space labels) contains `GeneratedBy = "endrawing"`
+2. Identifies generated sheets: Scope SHEET, Purpose "General Arrangement", and every DRAWING reference pointing at a generated drawing's SVG. A sheet holding any other drawing, or none, is the user's and is kept. Purpose alone never decides ownership
+3. Removes the generated drawings' own IfcDocumentInformation (and with it their references and parent membership), then the annotations using `api.root.remove_product()`
+4. Removes the generated drawings' DRAWING groups once they're empty (a group still holding annotations the user added is kept)
+5. Removes the generated sheets with `api.document.remove_information()`
+6. Regenerates fresh GA drawings and sheets for all current buildings
+
+The DRAWINGS parent document and group are shared with Bonsai-made drawings and are never removed.
 
 This makes endrawing **idempotent** - running it multiple times updates the GA drawings to match the current building model, while preserving all other project drawings.
 
@@ -79,7 +85,7 @@ This makes endrawing **idempotent** - running it multiple times updates the GA d
   - EAST: Views from east looking west (x+, ref direction y+)
   - WEST: Views from west looking east (x-, ref direction y-)
 
-**IFC API Usage**: The tool uses ifcopenshell.api for high-level operations (api.root.create_entity, api.pset, api.group, api.drawing) and direct IFC entity creation for lower-level geometry (createIfcCartesianPoint, createIfcAxis2Placement3D, createIfcDocumentReference).
+**IFC API Usage**: The tool uses ifcopenshell.api for contexts, documents, groups, psets and products (api.context, api.document, api.group, api.pset, api.root, api.drawing), which handles schema differences, so IFC2X3 and IFC4 both work. Direct IFC entity creation is only used for lower-level geometry whose attribute layout is the same in both schemas (createIfcCartesianPoint, createIfcAxis2Placement3D, createIfcBlock, createIfcTextLiteralWithExtent). IFC2X3 models need an owner history user and application (see tests/test_documents.py).
 
 **Building Selection**: Bounding boxes collect a building's elements with `ifcopenshell.util.element.get_decomposition()`, which gives the same elements as a selector `location=` query but is about 20x faster on large models. Storeys are still found with ifcopenshell.util.selector location filters (`'IfcBuildingStorey, location="{building.Name}"'`), and elevation Include filters written for Bonsai use the same syntax.
 
