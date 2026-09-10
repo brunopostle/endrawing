@@ -27,9 +27,9 @@ The codebase is organized into functional classes in `endrawing.py`:
 ### Geometry Operations
 - **GeometryUtils**:
   - `get_bbox()`: Calculates bounding boxes enclosing the geometry of all IfcElements in a location. Elements without geometry contribute their placement origin instead
-  - `get_element_bounds()`: Tessellates elements in one multithreaded `ifcopenshell.geom.iterator` pass (world coords, project units, openings skipped) and takes numpy min/max per vertex buffer. Uses the `hybrid-cgal-simple-opencascade` kernel (about 2x faster than OpenCASCADE, same bounds), falling back to `opencascade` on builds without CGAL. DrawingGenerator calls it once and passes the result to every `get_bbox()` call
-  - `get_centroid()`: Computes geometric centroid from element vertices for label placement
-  - Both methods are essential for camera positioning and space label placement
+  - `iterate_shapes()`: Tessellates elements in one multithreaded `ifcopenshell.geom.iterator` pass (world coords, project units, openings skipped). Uses the `hybrid-cgal-simple-opencascade` kernel (about 2x faster than OpenCASCADE, same bounds), falling back to `opencascade` on builds without CGAL
+  - `get_element_bounds()`: Takes numpy min/max per vertex buffer from `iterate_shapes()`. DrawingGenerator calls it once and passes the result to every `get_bbox()` call
+  - `get_centroids()`: Volume centroids of element meshes from `iterate_shapes()`, used to place space labels. `generate_drawings()` calls it once for all spaces
 
 ### Drawing Generation
 - **DrawingGenerator**: Main orchestrator class that:

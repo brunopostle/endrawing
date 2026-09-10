@@ -108,32 +108,27 @@ class GeometryUtils:
         return elements
 
     @staticmethod
-    def get_element_bounds(ifc_file, elements):
-        """Calculate world bounding boxes of element geometry
-
-        Tessellates all elements in one multithreaded iterator pass and takes
-        min/max over each vertex buffer with numpy, so no per-vertex Python
-        loop is involved.
+    def iterate_shapes(ifc_file, elements):
+        """Tessellate elements in one multithreaded iterator pass
 
         Args:
             ifc_file: The IFC file
-            elements: Iterable of IfcElements
+            elements: Iterable of elements
 
-        Returns:
-            Dict of {element id: (min_xyz, max_xyz)} in project units. Elements
-            without body geometry are absent.
+        Yields:
+            Shapes in world coordinates and project units, for elements that
+            have body geometry
         """
-        bounds = {}
         elements = list(elements)
         if not elements:
-            return bounds
+            return
 
         settings = ifcopenshell.geom.settings()
         settings.set("use-world-coords", True)
         settings.set("convert-back-units", True)
         # Openings only ever remove material, so they can't enlarge a
         # bounding box, and boolean subtraction is the slowest part of
-        # tessellation.
+        # tessellation. Spaces have no openings.
         settings.set("disable-opening-subtractions", True)
         settings.set("no-normals", True)
         settings.set("weld-vertices", False)
@@ -151,16 +146,34 @@ class GeometryUtils:
             # Builds without CGAL have no hybrid kernel
             iterator = ifcopenshell.geom.iterator(*iterator_args, include=elements)
         if not iterator.initialize():
-            return bounds
+            return
 
         while True:
-            shape = iterator.get()
-            verts = ifcopenshell.util.shape.get_vertices(shape.geometry)
-            if len(verts):
-                bounds[shape.id] = (verts.min(axis=0), verts.max(axis=0))
+            yield iterator.get()
             if not iterator.next():
                 break
 
+    @staticmethod
+    def get_element_bounds(ifc_file, elements):
+        """Calculate world bounding boxes of element geometry
+
+        Tessellates all elements in one multithreaded iterator pass and takes
+        min/max over each vertex buffer with numpy, so no per-vertex Python
+        loop is involved.
+
+        Args:
+            ifc_file: The IFC file
+            elements: Iterable of IfcElements
+
+        Returns:
+            Dict of {element id: (min_xyz, max_xyz)} in project units. Elements
+            without body geometry are absent.
+        """
+        bounds = {}
+        for shape in GeometryUtils.iterate_shapes(ifc_file, elements):
+            verts = ifcopenshell.util.shape.get_vertices(shape.geometry)
+            if len(verts):
+                bounds[shape.id] = (verts.min(axis=0), verts.max(axis=0))
         return bounds
 
     @staticmethod
@@ -226,39 +239,50 @@ class GeometryUtils:
         return (bbox_min, bbox_mid, bbox_max)
 
     @staticmethod
-    def get_centroid(element):
-        """Calculate centroid of an element
+    def get_centroids(ifc_file, elements):
+        """Calculate world centroids of element geometry
+
+        Uses the volume centroid of each mesh, which unlike the mean of its
+        vertices isn't pulled towards densely tessellated edges. A mesh that
+        encloses no volume falls back to the mean of its vertices.
 
         Args:
-            element: The IFC element
+            ifc_file: The IFC file
+            elements: Iterable of elements
 
         Returns:
-            List [x, y, z] of centroid coordinates
+            Dict of {element id: [x, y, z]} in project units. Elements without
+            body geometry are absent.
         """
-        settings = ifcopenshell.geom.settings()
-        element_shape = ifcopenshell.geom.create_shape(settings, element)
-        verts = element_shape.geometry.verts
-        no_verts = int(len(verts) / 3)
-
-        x, y, z = 0.0, 0.0, 0.0
-        for i in range(no_verts):
-            x += verts[(i * 3)]
-            y += verts[(i * 3) + 1]
-            z += verts[(i * 3) + 2]
-
-        x /= no_verts
-        y /= no_verts
-        z /= no_verts
-
-        local_placement = ifcopenshell.util.placement.get_local_placement(
-            element.ObjectPlacement
-        )
-
-        return [
-            x + float(local_placement[0][3]),
-            y + float(local_placement[1][3]),
-            z + float(local_placement[2][3]),
-        ]
+        centroids = {}
+        for shape in GeometryUtils.iterate_shapes(ifc_file, elements):
+            verts = ifcopenshell.util.shape.get_vertices(shape.geometry)
+            if not len(verts):
+                continue
+            # Work relative to the mean vertex so that large survey
+            # coordinates don't lose precision
+            origin = verts.mean(axis=0)
+            triangles = (verts - origin)[ifcopenshell.util.shape.get_faces(shape.geometry)]
+            # Signed volumes of the tetrahedra joining each triangle to origin
+            volumes = (
+                np.einsum(
+                    "ij,ij->i",
+                    triangles[:, 0],
+                    np.cross(triangles[:, 1], triangles[:, 2]),
+                )
+                / 6.0
+            )
+            volume = volumes.sum()
+            if abs(volume) <= 1e-9 * np.ptp(verts, axis=0).max() ** 3:
+                centroids[shape.id] = [float(v) for v in origin]
+                continue
+            # Each tetrahedron's centroid is a quarter of its three triangle
+            # corners, its fourth corner being the origin
+            centroid = origin + (volumes[:, None] * triangles.sum(axis=1)).sum(
+                axis=0
+            ) / (4.0 * volume)
+            centroids[shape.id] = [float(v) for v in centroid]
+        return centroids
 
 
 class ShapeCreator:
@@ -615,23 +639,35 @@ class DrawingGenerator:
         drawing_id += 1
         return drawing_id, annotation, group
 
-    def create_space_labels(self, storey, elevation, group):
+    @staticmethod
+    def get_storey_spaces(storey):
+        """Get the spaces that make up a storey
+
+        Args:
+            storey: The building storey
+
+        Returns:
+            List of IfcSpace
+        """
+        return [
+            part
+            for part in ifcopenshell.util.element.get_parts(storey)
+            if part.is_a("IfcSpace")
+        ]
+
+    def create_space_labels(self, storey, elevation, group, centroids):
         """Create labels for spaces in a storey
 
         Args:
             storey: The building storey
             elevation: Elevation value
             group: Drawing group
+            centroids: Result of GeometryUtils.get_centroids() for the spaces
         """
-        if not storey.IsDecomposedBy:
-            return
-
-        for space in storey.IsDecomposedBy[0].RelatedObjects:
-            # Get space centroid. Spaces without a geometry representation make
-            # create_shape raise; skip them rather than aborting the whole run.
-            try:
-                centroid = GeometryUtils.get_centroid(space)
-            except RuntimeError:
+        for space in self.get_storey_spaces(storey):
+            # Spaces without body geometry have no centroid to label
+            centroid = centroids.get(space.id())
+            if centroid is None:
                 continue
 
             # Create placement (0.1 meters above floor in project units)
@@ -959,9 +995,43 @@ class DrawingGenerator:
         for sheet in sheets:
             api.document.remove_information(self.ifc_file, information=sheet)
 
+    def get_storeys(self, building):
+        """Get the storeys of a building, lowest first
+
+        Args:
+            building: The building element
+
+        Returns:
+            List of (elevation, storey) pairs
+        """
+        # Pairs rather than a dict keyed by elevation, so two storeys sharing
+        # an elevation (mezzanines, split levels) don't overwrite each other
+        storeys = []
+        for ifc_storey in ifcopenshell.util.selector.filter_elements(
+            self.ifc_file, f'IfcBuildingStorey, location="{building.Name}"'
+        ):
+            local_placement = ifcopenshell.util.placement.get_local_placement(
+                ifc_storey.ObjectPlacement
+            )
+            storeys.append((local_placement[2][3], ifc_storey))
+        return sorted(storeys, key=lambda s: s[0])
+
     def generate_drawings(self):
         """Generate all drawings for buildings"""
         self.cleanup_existing_drawings()
+
+        storeys = {building: self.get_storeys(building) for building in self.buildings}
+
+        # Tessellate every labelled space in one pass
+        centroids = GeometryUtils.get_centroids(
+            self.ifc_file,
+            [
+                space
+                for building_storeys in storeys.values()
+                for _, storey in building_storeys
+                for space in self.get_storey_spaces(storey)
+            ],
+        )
 
         sheet_id = 0
 
@@ -976,25 +1046,11 @@ class DrawingGenerator:
             building_bbox = GeometryUtils.get_bbox(
                 self.ifc_file, [building], self.element_bounds
             )
-            bbox_min, bbox_mid, bbox_max = building_bbox
-
-            # Collect storeys as (elevation, storey) pairs rather than a dict
-            # keyed by elevation, so two storeys sharing an elevation
-            # (mezzanines, split levels) don't overwrite each other. Sort by
-            # elevation separately below.
-            storeys = []
-            for ifc_storey in ifcopenshell.util.selector.filter_elements(
-                self.ifc_file, f'IfcBuildingStorey, location="{building.Name}"'
-            ):
-                local_placement = ifcopenshell.util.placement.get_local_placement(
-                    ifc_storey.ObjectPlacement
-                )
-                storeys.append((local_placement[2][3], ifc_storey))
 
             drawing_id = 0
 
             # Create plan drawings for each storey
-            for elevation, storey in sorted(storeys, key=lambda s: s[0]):
+            for elevation, storey in storeys[building]:
                 drawing_id, annotation, group = self.create_plan_drawing(
                     storey,
                     building_bbox,
@@ -1004,7 +1060,7 @@ class DrawingGenerator:
                 )
 
                 # Add space labels
-                self.create_space_labels(storey, elevation, group)
+                self.create_space_labels(storey, elevation, group, centroids)
 
             # Create elevation drawings
             for direction in ["NORTH", "SOUTH", "WEST", "EAST"]:
