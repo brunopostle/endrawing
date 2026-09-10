@@ -26,7 +26,8 @@ The codebase is organized into functional classes in `endrawing.py`:
 
 ### Geometry Operations
 - **GeometryUtils**:
-  - `get_bbox()`: Calculates bounding boxes from spatial element placements by iterating through all IfcElements in a location
+  - `get_bbox()`: Calculates bounding boxes enclosing the geometry of all IfcElements in a location. Elements without geometry contribute their placement origin instead
+  - `get_element_bounds()`: Tessellates elements in one multithreaded `ifcopenshell.geom.iterator` pass (world coords, project units, openings skipped) and takes numpy min/max per vertex buffer. Uses the `hybrid-cgal-simple-opencascade` kernel (about 2x faster than OpenCASCADE, same bounds), falling back to `opencascade` on builds without CGAL. DrawingGenerator calls it once and passes the result to every `get_bbox()` call
   - `get_centroid()`: Computes geometric centroid from element vertices for label placement
   - Both methods are essential for camera positioning and space label placement
 
@@ -80,7 +81,7 @@ This makes endrawing **idempotent** - running it multiple times updates the GA d
 
 **IFC API Usage**: The tool uses ifcopenshell.api for high-level operations (api.root.create_entity, api.pset, api.group, api.drawing) and direct IFC entity creation for lower-level geometry (createIfcCartesianPoint, createIfcAxis2Placement3D, createIfcDocumentReference).
 
-**Building Selection**: Uses ifcopenshell.util.selector with location filters: `'IfcElement, location="{building.Name}"'` to scope geometry queries to specific buildings/storeys.
+**Building Selection**: Bounding boxes collect a building's elements with `ifcopenshell.util.element.get_decomposition()`, which gives the same elements as a selector `location=` query but is about 20x faster on large models. Storeys are still found with ifcopenshell.util.selector location filters (`'IfcBuildingStorey, location="{building.Name}"'`), and elevation Include filters written for Bonsai use the same syntax.
 
 **Asset References**: EPset_Drawing properties reference external resources:
 - `drawings/assets/default.css` - Drawing stylesheet

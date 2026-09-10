@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 
 import sys
+import multiprocessing
+import numpy as np
 from natsort import natsorted
 import ifcopenshell
 import ifcopenshell.api as api
@@ -15,6 +17,7 @@ import ifcopenshell.util
 import ifcopenshell.util.selector
 import ifcopenshell.util.representation
 import ifcopenshell.util.placement
+import ifcopenshell.util.shape
 import ifcopenshell.util.unit
 import ifcopenshell.util.element
 
@@ -81,58 +84,137 @@ class GeometryUtils:
     """Utility functions for geometry operations"""
 
     @staticmethod
-    def get_bbox(ifc_file, spatial_elements):
-        """Calculate bounding box for spatial elements
+    def get_location_elements(ifc_file, spatial_elements):
+        """Collect the IfcElements located in any of the spatial elements
+
+        Walks the spatial decomposition directly, which returns the same
+        elements as a selector location="{Name}" query but is much faster on
+        large models and doesn't depend on names being unique or set.
 
         Args:
             ifc_file: The IFC file
             spatial_elements: List of spatial elements
 
         Returns:
+            Set of IfcElements
+        """
+        elements = set()
+        for spatial_element in spatial_elements:
+            elements.update(
+                e
+                for e in ifcopenshell.util.element.get_decomposition(spatial_element)
+                if e.is_a("IfcElement")
+            )
+        return elements
+
+    @staticmethod
+    def get_element_bounds(ifc_file, elements):
+        """Calculate world bounding boxes of element geometry
+
+        Tessellates all elements in one multithreaded iterator pass and takes
+        min/max over each vertex buffer with numpy, so no per-vertex Python
+        loop is involved.
+
+        Args:
+            ifc_file: The IFC file
+            elements: Iterable of IfcElements
+
+        Returns:
+            Dict of {element id: (min_xyz, max_xyz)} in project units. Elements
+            without body geometry are absent.
+        """
+        bounds = {}
+        elements = list(elements)
+        if not elements:
+            return bounds
+
+        settings = ifcopenshell.geom.settings()
+        settings.set("use-world-coords", True)
+        settings.set("convert-back-units", True)
+        # Openings only ever remove material, so they can't enlarge a
+        # bounding box, and boolean subtraction is the slowest part of
+        # tessellation.
+        settings.set("disable-opening-subtractions", True)
+        settings.set("no-normals", True)
+        settings.set("weld-vertices", False)
+
+        # The hybrid kernel uses CGAL for polyhedral geometry and OpenCASCADE
+        # only where needed, giving the same bounds around twice as fast.
+        iterator_args = (settings, ifc_file, multiprocessing.cpu_count())
+        try:
+            iterator = ifcopenshell.geom.iterator(
+                *iterator_args,
+                include=elements,
+                geometry_library="hybrid-cgal-simple-opencascade",
+            )
+        except RuntimeError:
+            # Builds without CGAL have no hybrid kernel
+            iterator = ifcopenshell.geom.iterator(*iterator_args, include=elements)
+        if not iterator.initialize():
+            return bounds
+
+        while True:
+            shape = iterator.get()
+            verts = ifcopenshell.util.shape.get_vertices(shape.geometry)
+            if len(verts):
+                bounds[shape.id] = (verts.min(axis=0), verts.max(axis=0))
+            if not iterator.next():
+                break
+
+        return bounds
+
+    @staticmethod
+    def get_bbox(ifc_file, spatial_elements, element_bounds=None):
+        """Calculate bounding box for spatial elements
+
+        Encloses the geometry of all elements located in the spatial elements.
+        Elements without geometry contribute their placement origin instead.
+
+        Args:
+            ifc_file: The IFC file
+            spatial_elements: List of spatial elements
+            element_bounds: Optional precomputed result of get_element_bounds(),
+                to avoid tessellating the same elements more than once
+
+        Returns:
             Tuple of (min_point, mid_point, max_point)
         """
-        bbox_min = None
-        bbox_max = None
+        elements = GeometryUtils.get_location_elements(ifc_file, spatial_elements)
+        if element_bounds is None:
+            element_bounds = GeometryUtils.get_element_bounds(ifc_file, elements)
 
-        for spatial_element in spatial_elements:
-            items = ifcopenshell.util.selector.filter_elements(
-                ifc_file, f'IfcElement, location="{spatial_element.Name}"'
+        mins = []
+        maxs = []
+
+        for element in elements:
+            if element.id() in element_bounds:
+                element_min, element_max = element_bounds[element.id()]
+                mins.append(element_min)
+                maxs.append(element_max)
+                continue
+
+            local_placement = ifcopenshell.util.placement.get_local_placement(
+                element.ObjectPlacement
             )
+            origin = local_placement[:3, 3]
 
-            for item in items:
-                local_placement = ifcopenshell.util.placement.get_local_placement(
-                    item.ObjectPlacement
-                )
-                x, y, z = (
-                    local_placement[0][3],
-                    local_placement[1][3],
-                    local_placement[2][3],
-                )
+            # Skip only elements sitting at the true world origin, which
+            # are typically unplaced. Elements legitimately placed on a
+            # single world axis (e.g. on x=0 at the grid origin) are kept.
+            if not origin.any():
+                continue
 
-                # Skip only elements sitting at the true world origin, which
-                # are typically unplaced. Elements legitimately placed on a
-                # single world axis (e.g. on x=0 at the grid origin) are kept.
-                if x == 0.0 and y == 0.0 and z == 0.0:
-                    continue
+            mins.append(origin)
+            maxs.append(origin)
 
-                if bbox_min is None:
-                    bbox_min = [x, y, z]
-                    bbox_max = [x, y, z]
-                    continue
-
-                bbox_min[0] = min(bbox_min[0], x)
-                bbox_min[1] = min(bbox_min[1], y)
-                bbox_min[2] = min(bbox_min[2], z)
-
-                bbox_max[0] = max(bbox_max[0], x)
-                bbox_max[1] = max(bbox_max[1], y)
-                bbox_max[2] = max(bbox_max[2], z)
-
-        # No validly placed elements found: return a degenerate bbox at the
-        # origin rather than crashing in the midpoint calculation below.
-        if bbox_min is None:
+        # No geometry or validly placed elements found: return a degenerate
+        # bbox at the origin rather than crashing in the midpoint calculation.
+        if not mins:
             bbox_min = [0.0, 0.0, 0.0]
             bbox_max = [0.0, 0.0, 0.0]
+        else:
+            bbox_min = [float(v) for v in np.min(mins, axis=0)]
+            bbox_max = [float(v) for v in np.max(maxs, axis=0)]
 
         # Calculate midpoint
         bbox_mid = [
@@ -282,7 +364,13 @@ class DrawingGenerator:
         self.buildings = natsorted(
             ifc_file.by_type("IfcBuilding"), key=lambda x: x.Name or ""
         )
-        self.bbox_all = GeometryUtils.get_bbox(ifc_file, self.buildings)
+        # Tessellate every element once, reused for all bounding boxes
+        self.element_bounds = GeometryUtils.get_element_bounds(
+            ifc_file, GeometryUtils.get_location_elements(ifc_file, self.buildings)
+        )
+        self.bbox_all = GeometryUtils.get_bbox(
+            ifc_file, self.buildings, self.element_bounds
+        )
         self.bbox_all_min, self.bbox_all_mid, self.bbox_all_max = self.bbox_all
 
         # Calculate dimensions (add 2 meters padding in project units)
@@ -843,7 +931,9 @@ class DrawingGenerator:
 
             # FIXME should use local building orientation for bbox and cameras
             # Calculate building bounding box and dimensions
-            building_bbox = GeometryUtils.get_bbox(self.ifc_file, [building])
+            building_bbox = GeometryUtils.get_bbox(
+                self.ifc_file, [building], self.element_bounds
+            )
             bbox_min, bbox_mid, bbox_max = building_bbox
 
             # Collect storeys as (elevation, storey) pairs rather than a dict
