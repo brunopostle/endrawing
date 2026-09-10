@@ -37,6 +37,41 @@ Either run on the command-line:
 Then in Bonsai BIM generate all the drawings before generating the sheets.
 """
 
+# Bonsai's imperial drawing scales, as {denominator: HumanScale}
+IMPERIAL_HUMAN_SCALES = {
+    1: "1'=1'-0\"",
+    2: '6"=1\'-0"',
+    4: '3"=1\'-0"',
+    8: '1-1/2"=1\'-0"',
+    12: '1"=1\'-0"',
+    16: '3/4"=1\'-0"',
+    24: '1/2"=1\'-0"',
+    32: '3/8"=1\'-0"',
+    48: '1/4"=1\'-0"',
+    64: '3/16"=1\'-0"',
+    96: '1/8"=1\'-0"',
+    120: "1\"=10'",
+    128: '3/32"=1\'-0"',
+    192: '1/16"=1\'-0"',
+    240: "1\"=20'",
+    360: "1\"=30'",
+    384: '1/32"=1\'-0"',
+    480: "1\"=40'",
+    600: "1\"=50'",
+    720: "1\"=60'",
+    768: '1/64"=1\'-0"',
+    840: "1\"=70'",
+    960: "1\"=80'",
+    1080: "1\"=90'",
+    1200: "1\"=100'",
+    1536: '1/128"=1\'-0"',
+    1800: "1\"=150'",
+    2400: "1\"=200'",
+    3600: "1\"=300'",
+    4800: "1\"=400'",
+    6000: "1\"=500'",
+}
+
 
 class ContextManager:
     """Manages IFC context creation and retrieval"""
@@ -356,12 +391,13 @@ class ShapeCreator:
 class DrawingGenerator:
     """Main drawing generation class"""
 
-    def __init__(self, ifc_file, scale=100, titleblock="A2"):
+    def __init__(self, ifc_file, scale=None, titleblock="A2"):
         """Initialize the drawing generator
 
         Args:
             ifc_file: The IFC file
-            scale: Drawing scale denominator (default 100)
+            scale: Drawing scale denominator (default 100, or 96 for
+                1/8"=1'-0" in imperial projects)
             titleblock: Titleblock size (default "A2")
         """
         self.ifc_file = ifc_file
@@ -375,7 +411,9 @@ class DrawingGenerator:
         if not model_context:
             raise ValueError("No Model context found in IFC file")
 
-        self.scale = scale
+        self.imperial = self.is_imperial(ifc_file)
+        # Like Bonsai, default to 1:100, or 1/8"=1'-0" in imperial projects
+        self.scale = scale or (96 if self.imperial else 100)
         self.titleblock = titleblock
         self.contexts = ContextManager.ensure_contexts(ifc_file)
         # To convert meters to project units: project_units = meters / unit_scale
@@ -399,6 +437,38 @@ class DrawingGenerator:
         self.dim_all_y = self.bbox_all_max[1] - self.bbox_all_min[1] + 2.0 / self.unit_scale
         self.dim_all_z = self.bbox_all_max[2] - self.bbox_all_min[2] + 2.0 / self.unit_scale
 
+    @staticmethod
+    def is_imperial(ifc_file):
+        """Check whether the project's length unit is imperial
+
+        Like Bonsai, any length unit that isn't an SI unit counts as imperial.
+
+        Args:
+            ifc_file: The IFC file
+
+        Returns:
+            True for imperial projects
+        """
+        unit = ifcopenshell.util.unit.get_project_unit(ifc_file, "LENGTHUNIT")
+        return bool(unit) and not unit.is_a("IfcSIUnit")
+
+    def get_human_scale(self, scale):
+        """Format a scale denominator for a drawing's HumanScale
+
+        Imperial projects use Bonsai's architectural or engineering notation,
+        such as 1/8"=1'-0" for 1/96, where there is one.
+
+        Args:
+            scale: Drawing scale denominator
+
+        Returns:
+            HumanScale string
+        """
+        scale = int(scale)
+        if self.imperial and scale in IMPERIAL_HUMAN_SCALES:
+            return IMPERIAL_HUMAN_SCALES[scale]
+        return f"1:{scale}"
+
     def create_drawing_pset(self, annotation, scale=50):
         """Create EPset_Drawing property set
 
@@ -421,7 +491,7 @@ class DrawingGenerator:
                 "GeneratedBy": "endrawing",
                 "TargetView": "PLAN_VIEW",
                 "Scale": f"1/{scale_str}",
-                "HumanScale": f"1:{scale_str}",
+                "HumanScale": self.get_human_scale(scale),
                 "HasUnderlay": False,
                 "HasLinework": True,
                 "HasAnnotation": True,
@@ -1158,8 +1228,9 @@ def main():
         parser.add_argument(
             "--scale",
             type=int,
-            default=100,
-            help="Drawing scale denominator (default: 100 for 1:100)",
+            default=None,
+            help="Drawing scale denominator (default: 100 for 1:100, or 96 for "
+            "1/8\"=1'-0\" in imperial projects)",
         )
         parser.add_argument(
             "--titleblock", default="A2", help="Titleblock size (default: A2)"

@@ -75,7 +75,7 @@ This makes endrawing **idempotent** - running it multiple times updates the GA d
 
 ## Key Technical Details
 
-**Drawing Scale**: Default scale is 1:100 on A2 sheets. Scale and titleblock are configurable via DrawingGenerator constructor parameters. Drawing positions on sheets are handled automatically by Bonsai BIM's heuristic placement when sheets are generated.
+**Drawing Scale**: Default scale is 1:100 on A2 sheets, or 1/96 (1/8"=1'-0") in imperial projects, matching Bonsai's add_drawing. Imperial HumanScale uses Bonsai's architectural and engineering notation (`IMPERIAL_HUMAN_SCALES`), falling back to `1:N`. The location plan is 10x the drawing scale (1:1000, or 1"=80'). Scale and titleblock are configurable via DrawingGenerator constructor parameters. Drawing positions on sheets are handled automatically by Bonsai BIM's heuristic placement when sheets are generated.
 
 **Camera Placement**: Drawing cameras are positioned using IFC placement matrices:
 - Plans: Positioned above storey elevations at `elevation + 1.8m` looking down
@@ -125,12 +125,12 @@ Runtime modes:
 - Imperial: feet, inches
 - Any other IFC-defined length units
 
-**Scale Denominators**: Drawing scale is independent of project units. Any scale can be specified (e.g., `--scale 100` for 1:100, `--scale 48` for 1:48).
+**Scale Denominators**: Only the default scale depends on project units: projects whose length unit isn't an SI unit are imperial, as in Bonsai. Any scale can be specified (e.g., `--scale 100` for 1:100, `--scale 48` for 1/4"=1'-0" in an imperial project).
 
 ## Known Limitations
 
 - **Building orientation**: Bounding box calculation doesn't consider building's local coordinate system rotation (see FIXME comment at endrawing.py:833)
-- **Default settings**: A2 and 1:100 scale are defaults (configurable via `--scale` and `--titleblock` arguments)
+- **Default settings**: A2 and 1:100 (1/8"=1'-0" imperial) scale are defaults (configurable via `--scale` and `--titleblock` arguments)
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->

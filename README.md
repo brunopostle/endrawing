@@ -18,7 +18,7 @@ Each building gets a sheet with plans and north, south, east and west elevations
 ### Command Line
 
 ```bash
-# Basic usage with defaults (1:100 scale, A2 titleblock)
+# Basic usage with defaults (1:100 scale, or 1/8"=1'-0" in imperial projects; A2 titleblock)
 python endrawing.py input.ifc output.ifc
 
 # Custom scale and titleblock
