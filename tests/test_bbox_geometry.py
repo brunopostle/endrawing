@@ -33,7 +33,7 @@ def _make_building(prefix=None):
     building.Name = "Test Building"
 
     storey = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcBuildingStorey")
-    storey.Name = "Test Building"  # location filter matches on Name
+    storey.Name = "Ground Floor"
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=building, products=[storey])
     storey.ObjectPlacement = _placement(ifc, None, (0.0, 0.0, 0.0))
 

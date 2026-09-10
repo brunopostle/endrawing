@@ -87,7 +87,7 @@ This makes endrawing **idempotent** - running it multiple times updates the GA d
 
 **IFC API Usage**: The tool uses ifcopenshell.api for contexts, documents, groups, psets and products (api.context, api.document, api.group, api.pset, api.root, api.drawing), which handles schema differences, so IFC2X3 and IFC4 both work. Direct IFC entity creation is only used for lower-level geometry whose attribute layout is the same in both schemas (createIfcCartesianPoint, createIfcAxis2Placement3D, createIfcBlock, createIfcTextLiteralWithExtent). IFC2X3 models need an owner history user and application (see tests/test_documents.py).
 
-**Building Selection**: Bounding boxes collect a building's elements with `ifcopenshell.util.element.get_decomposition()`, which gives the same elements as a selector `location=` query but is about 20x faster on large models. Storeys are still found with ifcopenshell.util.selector location filters (`'IfcBuildingStorey, location="{building.Name}"'`), and elevation Include filters written for Bonsai use the same syntax.
+**Building Selection**: Bounding boxes collect a building's elements with `ifcopenshell.util.element.get_decomposition()`, which gives the same elements as a selector `location=` query but is about 20x faster on large models. Storeys are found the same way. Elevation and location plan Include filters, which Bonsai evaluates as selector strings, use `location="{building.GlobalId}"`: the selector matches a location by Name or GlobalId, and GlobalId keeps buildings that share a Name apart.
 
 **Asset References**: EPset_Drawing properties reference external resources:
 - `drawings/assets/default.css` - Drawing stylesheet

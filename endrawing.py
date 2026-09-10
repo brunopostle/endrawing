@@ -14,7 +14,6 @@ import ifcopenshell.api.pset
 import ifcopenshell.api.root
 import ifcopenshell.geom
 import ifcopenshell.util
-import ifcopenshell.util.selector
 import ifcopenshell.util.representation
 import ifcopenshell.util.placement
 import ifcopenshell.util.shape
@@ -450,7 +449,8 @@ class DrawingGenerator:
             pset=pset,
             properties={
                 "TargetView": "ELEVATION_VIEW",
-                "Include": f'IfcTypeProduct, IfcProduct, location="{building.Name}"',
+                # GlobalId rather than Name, which buildings can share
+                "Include": f'IfcTypeProduct, IfcProduct, location="{building.GlobalId}"',
             },
         )
 
@@ -912,7 +912,7 @@ class DrawingGenerator:
             pset=pset,
             properties={
                 "TargetView": "PLAN_VIEW",
-                "Include": f'IfcSite + IfcRoof, IfcWall, IfcSlab, location="{building.Name}"',
+                "Include": f'IfcSite + IfcRoof, IfcWall, IfcSlab, location="{building.GlobalId}"',
             },
         )
 
@@ -1060,11 +1060,13 @@ class DrawingGenerator:
             List of (elevation, storey) pairs
         """
         # Pairs rather than a dict keyed by elevation, so two storeys sharing
-        # an elevation (mezzanines, split levels) don't overwrite each other
+        # an elevation (mezzanines, split levels) don't overwrite each other.
+        # Walking the decomposition rather than querying by location Name
+        # keeps buildings that share a Name apart.
         storeys = []
-        for ifc_storey in ifcopenshell.util.selector.filter_elements(
-            self.ifc_file, f'IfcBuildingStorey, location="{building.Name}"'
-        ):
+        for ifc_storey in ifcopenshell.util.element.get_decomposition(building):
+            if not ifc_storey.is_a("IfcBuildingStorey"):
+                continue
             local_placement = ifcopenshell.util.placement.get_local_placement(
                 ifc_storey.ObjectPlacement
             )

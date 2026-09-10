@@ -19,7 +19,7 @@ def _make_storey_with_walls(wall_coords):
     building.Name = "Test Building"
 
     storey = ifcopenshell.api.run("root.create_entity", ifc, ifc_class="IfcBuildingStorey")
-    storey.Name = "Test Building"  # location filter matches on Name
+    storey.Name = "Ground Floor"
     ifcopenshell.api.run("aggregate.assign_object", ifc, relating_object=building, products=[storey])
 
     axis_z = ifc.createIfcDirection((0.0, 0.0, 1.0))
