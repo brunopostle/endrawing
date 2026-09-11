@@ -135,7 +135,7 @@ def test_millimeters_camera_height(millimeters_ifc):
     # Find the plan drawing (Ground Floor)
     plan_drawing = None
     for annotation in millimeters_ifc.by_type("IfcAnnotation"):
-        if annotation.Name == "Ground Floor" and annotation.ObjectType == "DRAWING":
+        if annotation.Name == "Test Building Ground Floor" and annotation.ObjectType == "DRAWING":
             plan_drawing = annotation
             break
 
@@ -164,7 +164,7 @@ def test_feet_camera_height(feet_ifc):
     # Find the plan drawing
     plan_drawing = None
     for annotation in feet_ifc.by_type("IfcAnnotation"):
-        if annotation.Name == "Ground Floor" and annotation.ObjectType == "DRAWING":
+        if annotation.Name == "Test Building Ground Floor" and annotation.ObjectType == "DRAWING":
             plan_drawing = annotation
             break
 
@@ -230,12 +230,12 @@ def test_cross_unit_consistency(meters_ifc, millimeters_ifc):
     plan_mm = None
 
     for annotation in meters_ifc.by_type("IfcAnnotation"):
-        if annotation.Name == "Ground Floor" and annotation.ObjectType == "DRAWING":
+        if annotation.Name == "Test Building Ground Floor" and annotation.ObjectType == "DRAWING":
             plan_m = annotation
             break
 
     for annotation in millimeters_ifc.by_type("IfcAnnotation"):
-        if annotation.Name == "Ground Floor" and annotation.ObjectType == "DRAWING":
+        if annotation.Name == "Test Building Ground Floor" and annotation.ObjectType == "DRAWING":
             plan_mm = annotation
             break
 

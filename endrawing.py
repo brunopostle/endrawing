@@ -790,6 +790,7 @@ class DrawingGenerator:
 
     def create_plan_drawing(
         self,
+        building,
         storey,
         building_bbox,
         scale,
@@ -803,6 +804,7 @@ class DrawingGenerator:
         along the sheet, is the building's x axis.
 
         Args:
+            building: The building element
             storey: The building storey
             building_bbox: Building bounding box tuple
             scale: Drawing scale
@@ -835,7 +837,9 @@ class DrawingGenerator:
 
         # Create annotation (camera volume depth 10 meters in project units)
         annotation = api.root.create_entity(self.ifc_file, ifc_class="IfcAnnotation")
-        annotation.Name = storey.Name
+        # Storey names like "Ground Floor" repeat across buildings, and the
+        # name gives the drawing its SVG path, so include the building
+        annotation.Name = f"{building.Name} {storey.Name}"
         annotation.ObjectType = "DRAWING"
         annotation.ObjectPlacement = local_placement
         annotation.Representation = ShapeCreator.create_camera_shape(
@@ -1326,6 +1330,7 @@ class DrawingGenerator:
             # Create plan drawings for each storey
             for elevation, storey in storeys[building]:
                 drawing_id, annotation, group = self.create_plan_drawing(
+                    building,
                     storey,
                     building_bbox,
                     self.scale,

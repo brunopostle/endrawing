@@ -55,13 +55,13 @@ def test_buildings_sharing_a_name_keep_their_own_storeys():
 
     DrawingGenerator(ifc).generate_drawings()
 
-    plan_locations = {"drawings/Ground A.svg", "drawings/Ground B.svg"}
+    plan_locations = {"drawings/Plot Ground A.svg", "drawings/Plot Ground B.svg"}
     sheets = sorted(
         (d for d in ifc.by_type("IfcDocumentInformation") if d.Scope == "SHEET"),
         key=lambda d: d.Identification,
     )
     plans = [sorted(r.Location for r in s.HasDocumentReferences if r.Location in plan_locations) for s in sheets]
-    assert sorted(plans) == [["drawings/Ground A.svg"], ["drawings/Ground B.svg"]]
+    assert sorted(plans) == [["drawings/Plot Ground A.svg"], ["drawings/Plot Ground B.svg"]]
 
 
 def test_include_filters_select_their_own_building():
@@ -82,3 +82,23 @@ def test_include_filters_select_their_own_building():
     for include in includes:
         selected = ifcopenshell.util.selector.filter_elements(ifc, include) & walls
         assert len(selected) == 1, include
+
+
+def test_plans_of_storeys_sharing_a_name_get_their_own_svg():
+    """Plans are named "{building} {storey}", so each building's "Ground Floor" gets its own SVG (endrawing-fkb)"""
+    ifc, plots = _make_twin_buildings()
+    for (building, storey, _), name in zip(plots, ("North Block", "South Block")):
+        building.Name = name
+        storey.Name = "Ground Floor"
+
+    DrawingGenerator(ifc).generate_drawings()
+
+    locations = {
+        a.Name: next(rel.RelatingDocument.Location for rel in a.HasAssociations if rel.is_a("IfcRelAssociatesDocument"))
+        for a in ifc.by_type("IfcAnnotation")
+        if a.ObjectType == "DRAWING" and a.Name.endswith("Ground Floor")
+    }
+    assert locations == {
+        "North Block Ground Floor": "drawings/North Block Ground Floor.svg",
+        "South Block Ground Floor": "drawings/South Block Ground Floor.svg",
+    }

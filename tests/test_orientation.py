@@ -146,7 +146,7 @@ def test_plan_square_to_building(kwargs, rotation):
 
     DrawingGenerator(ifc).generate_drawings()
 
-    location, axis, ref_direction, dims = _camera(_drawings(ifc)["Ground Floor"])
+    location, axis, ref_direction, dims = _camera(_drawings(ifc)["Block Ground Floor"])
     x_axis, _ = _axes(rotation)
     assert axis == pytest.approx([0.0, 0.0, 1.0])
     assert ref_direction == pytest.approx(x_axis)
@@ -212,7 +212,7 @@ def test_rotated_elements_in_unrotated_building_stay_world_aligned():
         "Block EAST",
         "Block WEST",
     }
-    location, axis, ref_direction, dims = _camera(drawings["Ground Floor"])
+    location, axis, ref_direction, dims = _camera(drawings["Block Ground Floor"])
     assert ref_direction == pytest.approx([1.0, 0.0, 0.0])
     # World-aligned bbox of the rotated block, padded by 2m
     angle = np.radians(30.0)

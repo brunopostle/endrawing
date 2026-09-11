@@ -142,7 +142,7 @@ def test_cleanup_preserves_empty_user_sheet(simple_building_ifc):
 def test_cleanup_preserves_sheet_mixing_user_and_generated_drawings(simple_building_ifc):
     """A sheet holding a generated drawing and a user drawing belongs to the user"""
     DrawingGenerator(simple_building_ifc).generate_drawings()
-    _add_user_sheet(simple_building_ifc, ["drawings/Ground Floor.svg", "drawings/USER PLAN.svg"])
+    _add_user_sheet(simple_building_ifc, ["drawings/Test Building Ground Floor.svg", "drawings/USER PLAN.svg"])
 
     DrawingGenerator(simple_building_ifc).generate_drawings()
 

@@ -35,7 +35,7 @@ The codebase is organized into functional classes in `endrawing.py`:
 - **DrawingGenerator**: Main orchestrator class that:
   - Calculates overall site bounding box from all buildings using natsorted ordering
   - Creates one sheet per building with identification like "A001", "A002", etc.
-  - Generates plan drawings for each building storey (camera positioned at elevation + 1.8m)
+  - Generates plan drawings for each building storey (camera positioned at elevation + 1.8m), named "{building} {storey}". A drawing's name gives its SVG path (`drawings/{name}.svg`), and storey names such as "Ground Floor" repeat across buildings, so the building name keeps them apart
   - Creates four elevation drawings, one per face of the building's bbox, named by the nearest compass point to true north (NORTH, NORTH-EAST, ... NORTH-WEST)
   - Optionally creates location plans at 10x scale when multiple buildings exist
   - Places space labels at geometric centroids using text annotations
