@@ -88,6 +88,10 @@ def _drawings(ifc):
     return {a.Name: a for a in ifc.by_type("IfcAnnotation") if a.ObjectType == "DRAWING"}
 
 
+def _is_elevation(annotation):
+    return ifcopenshell.util.element.get_psets(annotation)["EPset_Drawing"]["TargetView"] == "ELEVATION_VIEW"
+
+
 def _camera(annotation):
     """Get (location, axis, ref_direction, block dimensions) of a drawing camera"""
     placement = annotation.ObjectPlacement.RelativePlacement
@@ -187,7 +191,7 @@ def test_elevations_named_by_compass_point(kwargs, names):
     DrawingGenerator(ifc).generate_drawings()
 
     drawings = _drawings(ifc)
-    assert {n for n in drawings if n.startswith("Block ")} == {f"Block {n}" for n in names}
+    assert {n for n, a in drawings.items() if _is_elevation(a)} == {f"Block {n}" for n in names}
     # Faces along the building's +y, -y, -x and +x axes
     normals = [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]]
     for name, normal in zip(names, normals):
@@ -206,7 +210,7 @@ def test_rotated_elements_in_unrotated_building_stay_world_aligned():
     DrawingGenerator(ifc).generate_drawings()
 
     drawings = _drawings(ifc)
-    assert {n for n in drawings if n.startswith("Block ")} == {
+    assert {n for n, a in drawings.items() if _is_elevation(a)} == {
         "Block NORTH",
         "Block SOUTH",
         "Block EAST",
