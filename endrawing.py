@@ -1320,7 +1320,8 @@ class DrawingGenerator:
                 rotation,
             )
 
-            drawing_id = 0
+            # Drawings on a sheet are numbered from 1, as is conventional
+            drawing_id = 1
 
             # Create plan drawings for each storey
             for elevation, storey in storeys[building]:

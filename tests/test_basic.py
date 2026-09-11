@@ -107,3 +107,12 @@ def test_custom_titleblock(simple_building_ifc):
             break
 
     assert found_titleblock, "No sheet found referencing A1 titleblock"
+
+
+def test_sheet_drawings_numbered_from_one(simple_building_ifc):
+    """Drawings on a sheet are numbered from 1, the industry convention"""
+    DrawingGenerator(simple_building_ifc).generate_drawings()
+
+    [sheet] = [d for d in simple_building_ifc.by_type("IfcDocumentInformation") if d.Scope == "SHEET"]
+    numbers = [r.Identification for r in sheet.HasDocumentReferences if r.Description == "DRAWING"]
+    assert sorted(numbers, key=int) == [str(i) for i in range(1, len(numbers) + 1)]

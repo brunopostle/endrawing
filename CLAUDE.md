@@ -130,7 +130,7 @@ Runtime modes:
 
 ## Known Limitations
 
-- **North arrows on rotated plans**: Bonsai's titleblocks rotate their north arrows by the project's true north only, per sheet, so on sheets of rotated buildings (whose plans are square to the sheet) the titleblock arrow is off by the building's rotation. Bonsai's symbols.svg has no north arrow symbol to place in the drawing instead (tracked in beads)
+- **North arrows on rotated plans**: Bonsai's titleblocks rotate their north arrows by the project's true north only, per sheet, so on sheets of rotated buildings (whose plans are square to the sheet) the titleblock arrow is off by the building's rotation. Automatic north arrows belong in lower-level tools (Bonsai), since users drawing by hand want them too, so endrawing doesn't place its own
 - **Default settings**: A2 and 1:100 (1/8"=1'-0" imperial) scale are defaults (configurable via `--scale` and `--titleblock` arguments)
 
 
