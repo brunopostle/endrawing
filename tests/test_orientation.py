@@ -5,7 +5,7 @@ import ifcopenshell.api
 import ifcopenshell.api.geometry
 import ifcopenshell.util.element
 import ifcopenshell.util.placement
-from endrawing import DrawingGenerator, GeometryUtils
+from endrawing import DrawingGenerator, GeometryUtils, get_placement
 
 
 def _placement(ifc, relative_to, rotation=0.0, xyz=(0.0, 0.0, 0.0)):
@@ -155,7 +155,7 @@ def test_plan_square_to_building(kwargs, rotation):
     assert axis == pytest.approx([0.0, 0.0, 1.0])
     assert ref_direction == pytest.approx(x_axis)
     assert dims == pytest.approx((12.0, 8.0, 10.0))
-    placement = ifcopenshell.util.placement.get_local_placement(building.ObjectPlacement)
+    placement = get_placement(building.ObjectPlacement)
     assert location == pytest.approx(placement[:3, :3] @ [5.0, 3.0, 1.8] + placement[:3, 3])
 
 
